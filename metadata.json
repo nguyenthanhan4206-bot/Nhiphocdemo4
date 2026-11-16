@@ -1,0 +1,10 @@
+{
+  "name": "Nhiphoc",
+  "description": "Nền tảng đồng hành học tập tối giản kết nối Học sinh, Cha mẹ và Trợ lý theo thời gian thực.",
+  "requestFramePermissions": [
+    "camera"
+  ],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}

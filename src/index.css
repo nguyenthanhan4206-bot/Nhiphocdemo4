@@ -1,0 +1,193 @@
+@import "tailwindcss";
+@custom-variant dark (&:where(.dark, .dark *));
+
+@layer base {
+  :root {
+    --font-display: 'Baloo 2', 'Nunito', system-ui, -apple-system, sans-serif;
+    --font-logo: 'Coiny', 'Playpen Sans', 'Baloo 2', cursive, sans-serif;
+    --font-sans: 'Nunito', system-ui, -apple-system, sans-serif;
+    --font-mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, monospace;
+    --note-paper: #FBF8F1;
+    --note-yellow: #FDF3D0;
+    --note-ink: #231E18;
+    --note-accent: #C45A15;
+  }
+
+  html {
+    scroll-behavior: smooth;
+    font-size: 18px;
+  }
+
+  @media (min-width: 640px) {
+    html {
+      font-size: 19px;
+    }
+  }
+
+  body {
+    font-family: var(--font-sans);
+    font-weight: 600;
+    background-color: #FBF8F1;
+    color: #231E18;
+  }
+
+  h1, h2, h3, h4, .font-display {
+    font-family: var(--font-display);
+    font-weight: 800;
+    letter-spacing: -0.01em;
+  }
+
+  .font-logo {
+    font-family: var(--font-logo);
+    font-weight: 400;
+    letter-spacing: 0.01em;
+  }
+
+  .font-mono {
+    font-family: var(--font-mono);
+  }
+}
+
+.tabular-nums {
+  font-variant-numeric: tabular-nums;
+}
+
+/* Dot-grid notebook paper background for calm visual focus */
+.nhiphoc-grid-bg {
+  background-image: radial-gradient(#E1D7C2 1.15px, transparent 1.15px);
+  background-size: 24px 24px;
+}
+
+/* Subtle ruled notebook lines option */
+.nhiphoc-ruled-note {
+  background-image: linear-gradient(to bottom, transparent 31px, #EFE6D2 32px);
+  background-size: 100% 32px;
+}
+
+@keyframes nhiphoc-heartbeat {
+  0%, 100% {
+    transform: scale(1);
+  }
+  15% {
+    transform: scale(1.24);
+  }
+  30% {
+    transform: scale(0.98);
+  }
+  45% {
+    transform: scale(1.16);
+  }
+  65% {
+    transform: scale(1);
+  }
+}
+
+@keyframes nhiphoc-ekg-flow {
+  0% {
+    stroke-dashoffset: 180;
+  }
+  100% {
+    stroke-dashoffset: 0;
+  }
+}
+
+.animate-heartbeat {
+  animation: nhiphoc-heartbeat 1.5s ease-in-out infinite;
+  transform-origin: center;
+}
+
+.animate-ekg-flow {
+  stroke-dasharray: 180;
+  animation: nhiphoc-ekg-flow 2.4s linear infinite;
+}
+
+@keyframes nhiphoc-flame {
+  0%, 100% {
+    transform: scale(1) rotate(-3deg);
+  }
+  25% {
+    transform: scale(1.12, 1.18) rotate(3deg) translateY(-1px);
+  }
+  50% {
+    transform: scale(0.96, 1.06) rotate(-2deg);
+  }
+  75% {
+    transform: scale(1.1, 1.15) rotate(4deg) translateY(-1.5px);
+  }
+}
+
+@keyframes nhiphoc-star-twinkle {
+  0%, 100% {
+    transform: scale(1) rotate(0deg);
+  }
+  35% {
+    transform: scale(1.16) rotate(8deg);
+  }
+  70% {
+    transform: scale(0.95) rotate(-6deg);
+  }
+}
+
+@keyframes nhiphoc-tree-sway {
+  0%, 100% {
+    transform: rotate(-2.5deg);
+  }
+  50% {
+    transform: rotate(2.5deg);
+  }
+}
+
+@keyframes nhiphoc-float-gentle {
+  0%, 100% {
+    transform: translateY(0px);
+  }
+  50% {
+    transform: translateY(-3px);
+  }
+}
+
+@keyframes nhiphoc-glow-pulse {
+  0%, 100% {
+    transform: scale(1);
+    opacity: 0.9;
+  }
+  50% {
+    transform: scale(1.14);
+    opacity: 1;
+  }
+}
+
+.animate-flame {
+  animation: nhiphoc-flame 1.35s ease-in-out infinite;
+  transform-origin: center bottom;
+}
+
+.animate-star-twinkle {
+  animation: nhiphoc-star-twinkle 2.2s ease-in-out infinite;
+  transform-origin: center;
+}
+
+.animate-tree-sway {
+  animation: nhiphoc-tree-sway 3.2s ease-in-out infinite;
+  transform-origin: center bottom;
+}
+
+.animate-float-gentle {
+  animation: nhiphoc-float-gentle 2.4s ease-in-out infinite;
+}
+
+.animate-glow-pulse {
+  animation: nhiphoc-glow-pulse 2s ease-in-out infinite;
+  transform-origin: center;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html {
+    scroll-behavior: auto;
+  }
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}

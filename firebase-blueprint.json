@@ -1,0 +1,656 @@
+{
+  "entities": {
+    "PublicUser": {
+      "title": "PublicUser",
+      "description": "Public-safe user profile without PII for Nhiphoc role and online presence.",
+      "type": "object",
+      "properties": {
+        "uid": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "displayName": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 80
+        },
+        "role": {
+          "type": "string",
+          "enum": ["student", "parent", "assistant"]
+        },
+        "isOnline": {
+          "type": "boolean"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": ["uid", "displayName", "role", "isOnline", "createdAt", "updatedAt"]
+    },
+    "PrivateUser": {
+      "title": "PrivateUser",
+      "description": "Strictly isolated PII document for user email and phone contact.",
+      "type": "object",
+      "properties": {
+        "uid": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "email": {
+          "type": "string",
+          "maxLength": 150
+        },
+        "phone": {
+          "type": "string",
+          "maxLength": 30
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": ["uid", "email", "phone", "createdAt", "updatedAt"]
+    },
+    "StudentProfile": {
+      "title": "StudentProfile",
+      "description": "Shared student workspace connecting student, parent, and assistant.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "studentName": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 80
+        },
+        "grade": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 40
+        },
+        "linkCode": {
+          "type": "string",
+          "minLength": 6,
+          "maxLength": 12,
+          "pattern": "^[A-Z0-9]+$"
+        },
+        "studentUid": {
+          "type": "string",
+          "maxLength": 128
+        },
+        "parentUid": {
+          "type": "string",
+          "maxLength": 128
+        },
+        "assistantUid": {
+          "type": "string",
+          "maxLength": 128
+        },
+        "assistantOnline": {
+          "type": "boolean"
+        },
+        "focusMinutesTotal": {
+          "type": "number"
+        },
+        "treeLevel": {
+          "type": "number"
+        },
+        "streakDays": {
+          "type": "number"
+        },
+        "createdBy": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "id",
+        "studentName",
+        "grade",
+        "linkCode",
+        "studentUid",
+        "parentUid",
+        "assistantUid",
+        "assistantOnline",
+        "focusMinutesTotal",
+        "treeLevel",
+        "streakDays",
+        "createdBy",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "StudentInvite": {
+      "title": "StudentInvite",
+      "description": "Lookup index mapping a student linkCode to studentId without exposing PII.",
+      "type": "object",
+      "properties": {
+        "linkCode": {
+          "type": "string",
+          "minLength": 6,
+          "maxLength": 12,
+          "pattern": "^[A-Z0-9]+$"
+        },
+        "studentId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "studentName": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 80
+        },
+        "grade": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 40
+        },
+        "createdBy": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": ["linkCode", "studentId", "studentName", "grade", "createdBy", "createdAt"]
+    },
+    "Assignment": {
+      "title": "Assignment",
+      "description": "Today or supplemental homework with photo submission and assistant grading.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "studentId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "studentUid": {
+          "type": "string",
+          "maxLength": 128
+        },
+        "parentUid": {
+          "type": "string",
+          "maxLength": 128
+        },
+        "assistantUid": {
+          "type": "string",
+          "maxLength": 128
+        },
+        "createdBy": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "type": {
+          "type": "string",
+          "enum": ["today", "extra"]
+        },
+        "subject": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 40
+        },
+        "title": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 120
+        },
+        "description": {
+          "type": "string",
+          "maxLength": 800
+        },
+        "dueLabel": {
+          "type": "string",
+          "maxLength": 60
+        },
+        "status": {
+          "type": "string",
+          "enum": ["pending", "submitted", "graded"]
+        },
+        "photoDataUrl": {
+          "type": "string",
+          "maxLength": 260000
+        },
+        "studentNote": {
+          "type": "string",
+          "maxLength": 500
+        },
+        "submittedAtMs": {
+          "type": "number"
+        },
+        "feedbackScheduledAtMs": {
+          "type": "number"
+        },
+        "instantFeedbackNote": {
+          "type": "string",
+          "maxLength": 300
+        },
+        "assistantFeedback": {
+          "type": "string",
+          "maxLength": 1000
+        },
+        "scoreLabel": {
+          "type": "string",
+          "maxLength": 40
+        },
+        "gradedBy": {
+          "type": "string",
+          "maxLength": 128
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "id",
+        "studentId",
+        "studentUid",
+        "parentUid",
+        "assistantUid",
+        "createdBy",
+        "type",
+        "subject",
+        "title",
+        "description",
+        "dueLabel",
+        "status",
+        "photoDataUrl",
+        "studentNote",
+        "submittedAtMs",
+        "feedbackScheduledAtMs",
+        "instantFeedbackNote",
+        "assistantFeedback",
+        "scoreLabel",
+        "gradedBy",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "FocusSession": {
+      "title": "FocusSession",
+      "description": "Completed focus timer session linked to student Focus Tree.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "studentId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "studentUid": {
+          "type": "string",
+          "maxLength": 128
+        },
+        "parentUid": {
+          "type": "string",
+          "maxLength": 128
+        },
+        "assistantUid": {
+          "type": "string",
+          "maxLength": 128
+        },
+        "durationMinutes": {
+          "type": "number"
+        },
+        "treeStage": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 40
+        },
+        "note": {
+          "type": "string",
+          "maxLength": 200
+        },
+        "createdBy": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "id",
+        "studentId",
+        "studentUid",
+        "parentUid",
+        "assistantUid",
+        "durationMinutes",
+        "treeStage",
+        "note",
+        "createdBy",
+        "createdAt"
+      ]
+    },
+    "Message": {
+      "title": "Message",
+      "description": "Parent-Assistant communication thread per student workspace.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "studentId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "studentUid": {
+          "type": "string",
+          "maxLength": 128
+        },
+        "parentUid": {
+          "type": "string",
+          "maxLength": 128
+        },
+        "assistantUid": {
+          "type": "string",
+          "maxLength": 128
+        },
+        "senderUid": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "senderName": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 80
+        },
+        "senderRole": {
+          "type": "string",
+          "enum": ["student", "parent", "assistant"]
+        },
+        "content": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1000
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "id",
+        "studentId",
+        "studentUid",
+        "parentUid",
+        "assistantUid",
+        "senderUid",
+        "senderName",
+        "senderRole",
+        "content",
+        "createdAt"
+      ]
+    },
+    "Schedule": {
+      "title": "Schedule",
+      "description": "Parent-Assistant study check-in or tutoring session schedule.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "studentId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "studentUid": {
+          "type": "string",
+          "maxLength": 128
+        },
+        "parentUid": {
+          "type": "string",
+          "maxLength": 128
+        },
+        "assistantUid": {
+          "type": "string",
+          "maxLength": 128
+        },
+        "createdBy": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "title": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 120
+        },
+        "dateStr": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 20
+        },
+        "timeStr": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 20
+        },
+        "note": {
+          "type": "string",
+          "maxLength": 400
+        },
+        "status": {
+          "type": "string",
+          "enum": ["requested", "confirmed", "completed", "cancelled"]
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "id",
+        "studentId",
+        "studentUid",
+        "parentUid",
+        "assistantUid",
+        "createdBy",
+        "title",
+        "dateStr",
+        "timeStr",
+        "note",
+        "status",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "FeedbackTicket": {
+      "title": "FeedbackTicket",
+      "description": "Parent feedback/help requests and assistant responses.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "studentId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "studentUid": {
+          "type": "string",
+          "maxLength": 128
+        },
+        "parentUid": {
+          "type": "string",
+          "maxLength": 128
+        },
+        "assistantUid": {
+          "type": "string",
+          "maxLength": 128
+        },
+        "createdBy": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "category": {
+          "type": "string",
+          "enum": ["feedback", "support", "management"]
+        },
+        "subject": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 120
+        },
+        "message": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1000
+        },
+        "reply": {
+          "type": "string",
+          "maxLength": 1000
+        },
+        "repliedBy": {
+          "type": "string",
+          "maxLength": 128
+        },
+        "status": {
+          "type": "string",
+          "enum": ["open", "replied", "closed"]
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "id",
+        "studentId",
+        "studentUid",
+        "parentUid",
+        "assistantUid",
+        "createdBy",
+        "category",
+        "subject",
+        "message",
+        "reply",
+        "repliedBy",
+        "status",
+        "createdAt",
+        "updatedAt"
+      ]
+    }
+  },
+  "firestore": {
+    "/users_public/{userId}": {
+      "schema": { "$ref": "#/entities/PublicUser" },
+      "description": "Public role and display profile for signed-in users."
+    },
+    "/users_private/{userId}": {
+      "schema": { "$ref": "#/entities/PrivateUser" },
+      "description": "Isolated PII contact fields accessible only by the owning user."
+    },
+    "/students/{studentId}": {
+      "schema": { "$ref": "#/entities/StudentProfile" },
+      "description": "Student learning profile linking student, parent, and assistant."
+    },
+    "/student_invites/{linkCode}": {
+      "schema": { "$ref": "#/entities/StudentInvite" },
+      "description": "Exact-lookup invite code mapping to studentId without PII."
+    },
+    "/assignments/{assignmentId}": {
+      "schema": { "$ref": "#/entities/Assignment" },
+      "description": "Student daily and supplemental homework assignments and graded feedback."
+    },
+    "/focus_sessions/{sessionId}": {
+      "schema": { "$ref": "#/entities/FocusSession" },
+      "description": "Logged focus timer sessions for the student's Focus Tree."
+    },
+    "/messages/{messageId}": {
+      "schema": { "$ref": "#/entities/Message" },
+      "description": "Real-time communication messages for a student workspace."
+    },
+    "/schedules/{scheduleId}": {
+      "schema": { "$ref": "#/entities/Schedule" },
+      "description": "Scheduled sessions between parent, student, and assistant."
+    },
+    "/feedback_tickets/{ticketId}": {
+      "schema": { "$ref": "#/entities/FeedbackTicket" },
+      "description": "Parent feedback, help requests, and assistant management notes."
+    }
+  }
+}
