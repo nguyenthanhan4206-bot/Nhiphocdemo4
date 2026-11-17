@@ -12,8 +12,16 @@ service cloud.firestore {
       return request.auth != null;
     }
 
+    function isAnonymousUser() {
+      return isSignedIn() && request.auth.token.firebase.sign_in_provider == 'anonymous';
+    }
+
     function isVerifiedUser() {
-      return isSignedIn() && request.auth.token.email_verified == true;
+      return isSignedIn() && (
+        request.auth.token.email_verified == true ||
+        (request.auth.token.phone_number is string && request.auth.token.phone_number.size() > 0) ||
+        isAnonymousUser()
+      );
     }
 
     function isValidId(id) {
@@ -141,8 +149,8 @@ service cloud.firestore {
           'id', 'studentId', 'studentUid', 'parentUid', 'assistantUid', 'createdBy',
           'type', 'subject', 'title', 'description', 'dueLabel', 'status',
           'photoDataUrl', 'studentNote', 'submittedAtMs', 'feedbackScheduledAtMs',
-          'instantFeedbackNote', 'assistantFeedback', 'scoreLabel', 'gradedBy',
-          'createdAt', 'updatedAt'
+          'instantFeedbackNote', 'assistantFeedback', 'assistantFeedbackPhotoUrl',
+          'scoreLabel', 'gradedBy', 'createdAt', 'updatedAt'
         ])
         && isValidId(data.id)
         && isValidId(data.studentId)
@@ -155,13 +163,14 @@ service cloud.firestore {
         && isStr(data.title, 1, 120)
         && isStr(data.description, 0, 800)
         && isStr(data.dueLabel, 0, 60)
-        && data.status in ['pending', 'submitted', 'graded']
+        && data.status in ['pending', 'submitted', 'needs_revision', 'graded']
         && isStr(data.photoDataUrl, 0, 260000)
         && isStr(data.studentNote, 0, 500)
         && data.submittedAtMs is number && data.submittedAtMs >= 0
         && data.feedbackScheduledAtMs is number && data.feedbackScheduledAtMs >= 0
         && isStr(data.instantFeedbackNote, 0, 300)
         && isStr(data.assistantFeedback, 0, 1000)
+        && (!('assistantFeedbackPhotoUrl' in data) || isStr(data.assistantFeedbackPhotoUrl, 0, 260000))
         && isStr(data.scoreLabel, 0, 40)
         && isOptionalUid(data.gradedBy)
         && data.createdAt is timestamp
@@ -358,8 +367,8 @@ service cloud.firestore {
             && incoming().studentUid == request.auth.uid
             && incoming().diff(existing()).affectedKeys().hasOnly(['studentUid', 'updatedAt']))
           ||
-          // Action: Link Parent
-          (existing().parentUid == ''
+          // Action: Link Parent (first-time link or re-link via valid anonymous code session)
+          ((existing().parentUid == '' || isAnonymousUser())
             && incoming().parentUid == request.auth.uid
             && incoming().diff(existing()).affectedKeys().hasOnly(['parentUid', 'updatedAt']))
           ||
@@ -435,32 +444,31 @@ service cloud.firestore {
             && hasMatchingStudentMembers(get(/databases/$(database)/documents/students/$(existing().studentId)).data, incoming())
             && incoming().diff(existing()).affectedKeys().hasOnly(['studentUid', 'parentUid', 'assistantUid', 'updatedAt']))
           ||
-          // Terminal state gate for content mutations
-          (existing().status != 'graded' && (
-            // Action: Student submits or updates photo homework before grading
-            ((existing().studentUid == request.auth.uid || existing().createdBy == request.auth.uid)
-              && existing().status in ['pending', 'submitted']
-              && incoming().status == 'submitted'
-              && incoming().diff(existing()).affectedKeys().hasOnly([
-                'status', 'photoDataUrl', 'studentNote',
-                'submittedAtMs', 'feedbackScheduledAtMs', 'instantFeedbackNote', 'updatedAt'
-              ]))
-            ||
-            // Action: Assistant grades homework
-            ((existing().assistantUid == request.auth.uid || existing().createdBy == request.auth.uid)
-              && incoming().status == 'graded'
-              && incoming().gradedBy == request.auth.uid
-              && incoming().diff(existing()).affectedKeys().hasOnly([
-                'status', 'assistantFeedback', 'scoreLabel', 'gradedBy', 'updatedAt'
-              ]))
-            ||
-            // Action: Edit pending assignment details
-            ((existing().assistantUid == request.auth.uid || existing().createdBy == request.auth.uid)
-              && existing().status == 'pending'
-              && incoming().diff(existing()).affectedKeys().hasOnly([
-                'title', 'description', 'dueLabel', 'subject', 'updatedAt'
-              ]))
-          ))
+          // Action: Student submits or resubmits photo homework (even after revision request or re-upload)
+          ((existing().studentUid == request.auth.uid || existing().createdBy == request.auth.uid)
+            && existing().status in ['pending', 'submitted', 'needs_revision', 'graded']
+            && incoming().status == 'submitted'
+            && incoming().diff(existing()).affectedKeys().hasOnly([
+              'status', 'photoDataUrl', 'studentNote',
+              'submittedAtMs', 'feedbackScheduledAtMs', 'instantFeedbackNote', 'updatedAt'
+            ]))
+          ||
+          // Action: Assistant grades homework or returns for revision with optional annotated photo
+          ((existing().assistantUid == request.auth.uid || existing().createdBy == request.auth.uid)
+            && existing().status in ['submitted', 'needs_revision', 'graded']
+            && incoming().status in ['graded', 'needs_revision']
+            && incoming().gradedBy == request.auth.uid
+            && incoming().diff(existing()).affectedKeys().hasOnly([
+              'status', 'assistantFeedback', 'assistantFeedbackPhotoUrl',
+              'scoreLabel', 'gradedBy', 'updatedAt'
+            ]))
+          ||
+          // Action: Edit pending or needs_revision assignment details
+          ((existing().assistantUid == request.auth.uid || existing().createdBy == request.auth.uid)
+            && existing().status in ['pending', 'needs_revision']
+            && incoming().diff(existing()).affectedKeys().hasOnly([
+              'title', 'description', 'dueLabel', 'subject', 'updatedAt'
+            ]))
         );
       allow delete: if isVerifiedUser()
         && isValidId(assignmentId)

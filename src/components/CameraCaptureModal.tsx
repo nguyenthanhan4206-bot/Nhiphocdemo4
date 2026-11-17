@@ -5,6 +5,11 @@ import { compressImageElement, compressImageFileToDataUrl } from '../utils/image
 interface CameraCaptureModalProps {
   assignmentTitle: string;
   initialNote?: string;
+  modalSubtitle?: string;
+  confirmLabel?: string;
+  submittingLabel?: string;
+  hideNote?: boolean;
+  revisionBanner?: string;
   onClose: () => void;
   onSubmit: (photoDataUrl: string, studentNote: string) => Promise<void>;
 }
@@ -12,6 +17,11 @@ interface CameraCaptureModalProps {
 export const CameraCaptureModal: React.FC<CameraCaptureModalProps> = ({
   assignmentTitle,
   initialNote = '',
+  modalSubtitle = 'Chụp ảnh nộp bài',
+  confirmLabel = 'Xác nhận nộp bài',
+  submittingLabel = 'Đang nộp bài...',
+  hideNote = false,
+  revisionBanner,
   onClose,
   onSubmit,
 }) => {
@@ -117,7 +127,7 @@ export const CameraCaptureModal: React.FC<CameraCaptureModalProps> = ({
       <div className="w-full max-w-xl bg-white border border-[#E5DBC4] rounded-2xl overflow-hidden shadow-xl">
         <div className="flex items-center justify-between px-6 py-4 border-b border-[#EFE6D2]">
           <div className="min-w-0 pr-4">
-            <p className="text-xs font-medium text-[#6B6154]">Chụp ảnh nộp bài</p>
+            <p className="text-xs font-medium text-[#C45A15]">{modalSubtitle}</p>
             <h3
               id="camera-modal-title"
               className="text-base font-bold text-[#231E18] truncate"
@@ -139,6 +149,13 @@ export const CameraCaptureModal: React.FC<CameraCaptureModalProps> = ({
         </div>
 
         <form onSubmit={handleConfirm} className="p-6 space-y-5">
+          {revisionBanner && (
+            <div className="rounded-xl border border-amber-300 bg-amber-50 px-4 py-2.5 text-xs text-amber-950 leading-relaxed">
+              <span className="font-bold">Góp ý từ Trợ lý: </span>
+              {revisionBanner}
+            </div>
+          )}
+
           {/* Capture / Preview Area */}
           <div className="rounded-xl border border-[#E5DBC4] bg-[#FBF8F1] overflow-hidden">
             {cameraActive ? (
@@ -250,23 +267,25 @@ export const CameraCaptureModal: React.FC<CameraCaptureModalProps> = ({
             className="hidden"
           />
 
-          <div>
-            <label
-              htmlFor="student-note-input"
-              className="block text-xs font-semibold text-[#231E18] mb-1.5"
-            >
-              Ghi chú gửi trợ lý (không bắt buộc)
-            </label>
-            <textarea
-              id="student-note-input"
-              rows={2}
-              maxLength={500}
-              value={note}
-              onChange={(e) => setNote(e.target.value)}
-              placeholder="Ví dụ: Em còn phân vân câu 3b, nhờ thầy/cô kiểm tra giúp em..."
-              className="w-full rounded-xl border border-[#E5DBC4] bg-white px-3.5 py-2.5 text-sm text-[#231E18] placeholder:text-[#968A7B] focus:outline-none focus:ring-2 focus:ring-[#C45A15]/25 focus:border-[#C45A15]"
-            />
-          </div>
+          {!hideNote && (
+            <div>
+              <label
+                htmlFor="student-note-input"
+                className="block text-xs font-semibold text-[#231E18] mb-1.5"
+              >
+                Ghi chú gửi trợ lý (không bắt buộc)
+              </label>
+              <textarea
+                id="student-note-input"
+                rows={2}
+                maxLength={500}
+                value={note}
+                onChange={(e) => setNote(e.target.value)}
+                placeholder="Ví dụ: Em còn phân vân câu 3b, nhờ thầy/cô kiểm tra giúp em..."
+                className="w-full rounded-xl border border-[#E5DBC4] bg-white px-3.5 py-2.5 text-sm text-[#231E18] placeholder:text-[#968A7B] focus:outline-none focus:ring-2 focus:ring-[#C45A15]/25 focus:border-[#C45A15]"
+              />
+            </div>
+          )}
 
           {errorMsg && (
             <p className="text-xs font-medium text-red-700 bg-red-50 border border-red-200 rounded-lg px-3.5 py-2.5">
@@ -291,7 +310,7 @@ export const CameraCaptureModal: React.FC<CameraCaptureModalProps> = ({
               className="inline-flex items-center gap-2 px-5 py-2.5 rounded-lg bg-[#C45A15] text-white text-sm font-semibold hover:bg-[#AA4C0F] disabled:opacity-45 disabled:cursor-not-allowed transition-colors whitespace-nowrap"
             >
               <Check className="w-4 h-4" />
-              {submitting ? 'Đang nộp bài...' : 'Xác nhận nộp bài'}
+              {submitting ? submittingLabel : confirmLabel}
             </button>
           </div>
         </form>

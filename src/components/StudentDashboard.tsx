@@ -68,7 +68,7 @@ interface StudentDashboardProps {
   onDeleteAccount: () => Promise<void>;
 }
 
-type StatusFilter = 'all' | 'pending' | 'submitted' | 'graded';
+type StatusFilter = 'all' | 'pending' | 'needs_revision' | 'submitted' | 'graded';
 
 function playGentleChime() {
   try {
@@ -289,11 +289,19 @@ export const StudentDashboard: React.FC<StudentDashboardProps> = ({
 
   const todayStats = useMemo(() => {
     const todayList = assignments.filter((a) => a.type === 'today');
-    const submittedOrGraded = todayList.filter((a) => a.status !== 'pending').length;
+    const submittedOrGraded = todayList.filter(
+      (a) => a.status === 'submitted' || a.status === 'graded',
+    ).length;
     const graded = todayList.filter((a) => a.status === 'graded').length;
+    const needsRevision = todayList.filter((a) => a.status === 'needs_revision').length;
     const pct = todayList.length > 0 ? Math.round((submittedOrGraded / todayList.length) * 100) : 0;
-    return { total: todayList.length, submittedOrGraded, graded, pct };
+    return { total: todayList.length, submittedOrGraded, graded, needsRevision, pct };
   }, [assignments]);
+
+  const currentNeedsRevisionCount = useMemo(
+    () => currentTypeAssignments.filter((a) => a.status === 'needs_revision').length,
+    [currentTypeAssignments],
+  );
 
   const treeStage = getTreeStageLabel(student.focusMinutesTotal);
   const nextMilestone =
@@ -416,7 +424,7 @@ export const StudentDashboard: React.FC<StudentDashboardProps> = ({
           className="w-full flex items-center justify-center gap-2 px-3.5 py-2 rounded-xl border border-[#E5DBC4] text-xs font-semibold text-[#5C5347] hover:bg-[#FDF3D0] transition-colors"
         >
           <LogOut className="w-3.5 h-3.5" />
-          Đăng xuất
+          Đăng xuất / Đổi vai trò
         </button>
         <button
           type="button"
@@ -610,11 +618,15 @@ export const StudentDashboard: React.FC<StudentDashboardProps> = ({
 
               {/* Interactive Filter Segmented Control */}
               <div className="flex flex-wrap items-center justify-between gap-4">
-                <div className="inline-flex items-center gap-1 p-1 rounded-xl bg-[#F3ECDC] border border-[#E5DBC4]">
+                <div className="inline-flex flex-wrap items-center gap-1 p-1 rounded-xl bg-[#F3ECDC] border border-[#E5DBC4]">
                   {(
                     [
                       { id: 'all', label: 'Tất cả' },
                       { id: 'pending', label: 'Chưa nộp' },
+                      {
+                        id: 'needs_revision',
+                        label: `Cần nộp lại${currentNeedsRevisionCount > 0 ? ` (${currentNeedsRevisionCount})` : ''}`,
+                      },
                       { id: 'submitted', label: 'Đã nộp' },
                       { id: 'graded', label: 'Đã chấm xong' },
                     ] as const
@@ -626,7 +638,9 @@ export const StudentDashboard: React.FC<StudentDashboardProps> = ({
                       className={`px-3.5 py-1.5 rounded-lg text-xs font-semibold transition-colors whitespace-nowrap ${
                         filter === tab.id
                           ? 'bg-white text-[#231E18] shadow-sm'
-                          : 'text-[#6B6154] hover:text-[#231E18]'
+                          : tab.id === 'needs_revision' && currentNeedsRevisionCount > 0
+                            ? 'text-amber-900 font-bold hover:text-[#231E18]'
+                            : 'text-[#6B6154] hover:text-[#231E18]'
                       }`}
                     >
                       {tab.label}
@@ -665,7 +679,9 @@ export const StudentDashboard: React.FC<StudentDashboardProps> = ({
                 <div className="space-y-4">
                   {filteredAssignments.map((item) => {
                     const isSubmitted = item.status === 'submitted';
+                    const isNeedsRevision = item.status === 'needs_revision';
                     const isGraded = item.status === 'graded';
+                    const canResubmit = isSubmitted || isNeedsRevision || isGraded;
                     const feedbackUnlocked =
                       isSubmitted &&
                       (student.assistantOnline ||
@@ -674,7 +690,9 @@ export const StudentDashboard: React.FC<StudentDashboardProps> = ({
                     return (
                       <article
                         key={item.id}
-                        className="rounded-2xl border border-[#E5DBC4] bg-white p-5 sm:p-6 space-y-4"
+                        className={`rounded-2xl border bg-white p-5 sm:p-6 space-y-4 ${
+                          isNeedsRevision ? 'border-amber-400' : 'border-[#E5DBC4]'
+                        }`}
                       >
                         <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-4">
                           <div className="flex items-start gap-3.5 min-w-0">
@@ -683,20 +701,26 @@ export const StudentDashboard: React.FC<StudentDashboardProps> = ({
                               className={`w-7 h-7 rounded-lg border flex items-center justify-center shrink-0 mt-0.5 ${
                                 isGraded
                                   ? 'bg-[#3F6A52] border-[#3F6A52] text-white'
-                                  : isSubmitted
-                                    ? 'bg-[#FDF3D0] border-[#C45A15] text-[#C45A15]'
-                                    : 'bg-[#FBF8F1] border-[#DDD1B8] text-[#8C8172]'
+                                  : isNeedsRevision
+                                    ? 'bg-amber-100 border-amber-500 text-amber-800'
+                                    : isSubmitted
+                                      ? 'bg-[#FDF3D0] border-[#C45A15] text-[#C45A15]'
+                                      : 'bg-[#FBF8F1] border-[#DDD1B8] text-[#8C8172]'
                               }`}
                               title={
                                 isGraded
                                   ? 'Đã chấm xong'
-                                  : isSubmitted
-                                    ? 'Đã nộp bài'
-                                    : 'Chưa nộp'
+                                  : isNeedsRevision
+                                    ? 'Cần làm lại & nộp lại'
+                                    : isSubmitted
+                                      ? 'Đã nộp bài'
+                                      : 'Chưa nộp'
                               }
                             >
                               {isGraded ? (
                                 <CheckCheck className="w-4 h-4" />
+                              ) : isNeedsRevision ? (
+                                <RotateCcw className="w-4 h-4" />
                               ) : isSubmitted ? (
                                 <Check className="w-4 h-4" />
                               ) : (
@@ -714,16 +738,20 @@ export const StudentDashboard: React.FC<StudentDashboardProps> = ({
                                   className={
                                     isGraded
                                       ? 'font-bold text-[#3F6A52]'
-                                      : isSubmitted
-                                        ? 'font-semibold text-[#C45A15]'
-                                        : 'text-[#8C8172]'
+                                      : isNeedsRevision
+                                        ? 'font-bold text-amber-800'
+                                        : isSubmitted
+                                          ? 'font-semibold text-[#C45A15]'
+                                          : 'text-[#8C8172]'
                                   }
                                 >
                                   {isGraded
                                     ? 'Tick: Đã chấm xong'
-                                    : isSubmitted
-                                      ? 'Tick: Đã nộp (chờ chấm chi tiết)'
-                                      : 'Chưa nộp'}
+                                    : isNeedsRevision
+                                      ? 'Cần làm lại & nộp lại'
+                                      : isSubmitted
+                                        ? 'Tick: Đã nộp (chờ chấm chi tiết)'
+                                        : 'Chưa nộp'}
                                 </span>
                               </div>
 
@@ -740,12 +768,15 @@ export const StudentDashboard: React.FC<StudentDashboardProps> = ({
                           </div>
 
                           {/* Action Buttons */}
-                          <div className="flex items-center gap-2.5 shrink-0 pl-10 sm:pl-0">
+                          <div className="flex flex-wrap items-center gap-2.5 shrink-0 pl-10 sm:pl-0">
                             {item.photoDataUrl && (
                               <button
                                 type="button"
                                 onClick={() =>
-                                  setPreviewPhoto({ title: item.title, url: item.photoDataUrl })
+                                  setPreviewPhoto({
+                                    title: `Ảnh em đã nộp · ${item.title}`,
+                                    url: item.photoDataUrl,
+                                  })
                                 }
                                 className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-lg border border-[#E5DBC4] bg-[#FBF8F1] text-xs font-semibold text-[#231E18] hover:bg-[#FDF3D0] transition-colors whitespace-nowrap"
                               >
@@ -754,20 +785,28 @@ export const StudentDashboard: React.FC<StudentDashboardProps> = ({
                               </button>
                             )}
 
-                            {!isGraded && (
-                              <button
-                                type="button"
-                                onClick={() => setSubmittingAssignment(item)}
-                                className={`inline-flex items-center gap-1.5 px-4 py-2 rounded-lg text-xs font-bold transition-colors whitespace-nowrap ${
-                                  isSubmitted
-                                    ? 'border border-[#C45A15] text-[#C45A15] hover:bg-[#FDF3D0]'
-                                    : 'bg-[#C45A15] text-white hover:bg-[#AA4C0F]'
-                                }`}
-                              >
+                            <button
+                              type="button"
+                              onClick={() => setSubmittingAssignment(item)}
+                              className={`inline-flex items-center gap-1.5 px-4 py-2 rounded-lg text-xs font-bold transition-colors whitespace-nowrap ${
+                                isNeedsRevision || !canResubmit
+                                  ? 'bg-[#C45A15] text-white hover:bg-[#AA4C0F]'
+                                  : 'border border-[#C45A15] text-[#C45A15] hover:bg-[#FDF3D0]'
+                              }`}
+                            >
+                              {canResubmit ? (
+                                <RotateCcw className="w-3.5 h-3.5" />
+                              ) : (
                                 <Camera className="w-3.5 h-3.5" />
-                                {isSubmitted ? 'Chụp lại ảnh' : 'Chụp ảnh nộp bài'}
-                              </button>
-                            )}
+                              )}
+                              {isNeedsRevision
+                                ? 'Nộp lại bài ngay'
+                                : isSubmitted
+                                  ? 'Nộp lại ảnh khác'
+                                  : isGraded
+                                    ? 'Nộp lại bài'
+                                    : 'Chụp ảnh nộp bài'}
+                            </button>
                           </div>
                         </div>
 
@@ -802,9 +841,64 @@ export const StudentDashboard: React.FC<StudentDashboardProps> = ({
                           </div>
                         )}
 
+                        {/* Needs Revision Box */}
+                        {isNeedsRevision && (
+                          <div className="ml-10 rounded-xl border border-amber-300 bg-amber-50 p-4 space-y-3">
+                            <div className="flex flex-wrap items-center justify-between gap-2">
+                              <span className="text-xs font-bold text-amber-900 inline-flex items-center gap-1.5">
+                                <RotateCcw className="w-4 h-4" />
+                                Trợ lý yêu cầu làm lại & nộp lại
+                              </span>
+                              {item.scoreLabel && (
+                                <span className="text-xs font-bold text-amber-950 tabular-nums">
+                                  {item.scoreLabel}
+                                </span>
+                              )}
+                            </div>
+                            {item.assistantFeedback && (
+                              <p className="text-sm text-[#231E18] leading-relaxed whitespace-pre-wrap">
+                                {item.assistantFeedback}
+                              </p>
+                            )}
+                            {item.assistantFeedbackPhotoUrl && (
+                              <div className="pt-1 space-y-1.5">
+                                <div className="flex items-center justify-between">
+                                  <span className="text-xs font-bold text-amber-950">
+                                    Ảnh trợ lý chấm & hướng dẫn sửa
+                                  </span>
+                                  <button
+                                    type="button"
+                                    onClick={() =>
+                                      setPreviewPhoto({
+                                        title: `Ảnh trợ lý chấm · ${item.title}`,
+                                        url: item.assistantFeedbackPhotoUrl || '',
+                                      })
+                                    }
+                                    className="inline-flex items-center gap-1 text-xs font-bold text-[#C45A15] hover:underline"
+                                  >
+                                    <Eye className="w-3.5 h-3.5" />
+                                    Xem ảnh lớn
+                                  </button>
+                                </div>
+                                <img
+                                  src={item.assistantFeedbackPhotoUrl}
+                                  alt="Ảnh trợ lý chấm bài"
+                                  onClick={() =>
+                                    setPreviewPhoto({
+                                      title: `Ảnh trợ lý chấm · ${item.title}`,
+                                      url: item.assistantFeedbackPhotoUrl || '',
+                                    })
+                                  }
+                                  className="max-h-56 rounded-lg border border-amber-200 bg-white object-contain cursor-zoom-in"
+                                />
+                              </div>
+                            )}
+                          </div>
+                        )}
+
                         {/* Graded Feedback Box */}
                         {isGraded && (
-                          <div className="ml-10 rounded-xl border border-[#E5DBC4] bg-[#FDF3D0]/80 p-4 space-y-2">
+                          <div className="ml-10 rounded-xl border border-[#E5DBC4] bg-[#FDF3D0]/80 p-4 space-y-3">
                             <div className="flex flex-wrap items-center justify-between gap-2">
                               <span className="text-xs font-bold text-[#3F6A52] inline-flex items-center gap-1.5">
                                 <MessageSquareText className="w-4 h-4" />
@@ -814,9 +908,44 @@ export const StudentDashboard: React.FC<StudentDashboardProps> = ({
                                 Kết quả: {item.scoreLabel || 'Hoàn thành tốt'}
                               </span>
                             </div>
-                            <p className="text-sm text-[#231E18] leading-relaxed">
-                              {item.assistantFeedback}
-                            </p>
+                            {item.assistantFeedback && (
+                              <p className="text-sm text-[#231E18] leading-relaxed whitespace-pre-wrap">
+                                {item.assistantFeedback}
+                              </p>
+                            )}
+                            {item.assistantFeedbackPhotoUrl && (
+                              <div className="pt-1 space-y-1.5">
+                                <div className="flex items-center justify-between">
+                                  <span className="text-xs font-bold text-[#3F6A52]">
+                                    Ảnh bài đã chấm từ Trợ lý
+                                  </span>
+                                  <button
+                                    type="button"
+                                    onClick={() =>
+                                      setPreviewPhoto({
+                                        title: `Ảnh trợ lý chấm · ${item.title}`,
+                                        url: item.assistantFeedbackPhotoUrl || '',
+                                      })
+                                    }
+                                    className="inline-flex items-center gap-1 text-xs font-bold text-[#C45A15] hover:underline"
+                                  >
+                                    <Eye className="w-3.5 h-3.5" />
+                                    Xem ảnh lớn
+                                  </button>
+                                </div>
+                                <img
+                                  src={item.assistantFeedbackPhotoUrl}
+                                  alt="Ảnh trợ lý chấm bài"
+                                  onClick={() =>
+                                    setPreviewPhoto({
+                                      title: `Ảnh trợ lý chấm · ${item.title}`,
+                                      url: item.assistantFeedbackPhotoUrl || '',
+                                    })
+                                  }
+                                  className="max-h-56 rounded-lg border border-[#E5DBC4] bg-white object-contain cursor-zoom-in"
+                                />
+                              </div>
+                            )}
                           </div>
                         )}
                       </article>
@@ -1043,6 +1172,22 @@ export const StudentDashboard: React.FC<StudentDashboardProps> = ({
         <CameraCaptureModal
           assignmentTitle={submittingAssignment.title}
           initialNote={submittingAssignment.studentNote}
+          modalSubtitle={
+            submittingAssignment.status !== 'pending'
+              ? 'Nộp lại ảnh bài tập'
+              : 'Chụp ảnh nộp bài'
+          }
+          confirmLabel={
+            submittingAssignment.status !== 'pending' ? 'Xác nhận nộp lại' : 'Xác nhận nộp bài'
+          }
+          submittingLabel={
+            submittingAssignment.status !== 'pending' ? 'Đang nộp lại...' : 'Đang nộp bài...'
+          }
+          revisionBanner={
+            submittingAssignment.status === 'needs_revision'
+              ? submittingAssignment.assistantFeedback
+              : undefined
+          }
           onClose={() => setSubmittingAssignment(null)}
           onSubmit={async (photoDataUrl, studentNote) => {
             await submitAssignmentPhoto({
@@ -1050,6 +1195,7 @@ export const StudentDashboard: React.FC<StudentDashboardProps> = ({
               photoDataUrl,
               studentNote,
               assistantOnline: student.assistantOnline,
+              isResubmission: submittingAssignment.status !== 'pending',
             });
             playSuccessSound();
           }}

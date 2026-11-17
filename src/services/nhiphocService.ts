@@ -1,5 +1,6 @@
 import { deleteUser, reauthenticateWithPopup } from 'firebase/auth';
 import {
+  deleteDoc,
   doc,
   getDoc,
   serverTimestamp,
@@ -23,6 +24,30 @@ import {
   UserRole,
 } from '../types';
 import { generateDocId, generateLinkCode } from '../utils/imageCompress';
+
+export function normalizeVietnamPhone(raw: string): string {
+  const cleaned = raw.replace(/[\s\-().]/g, '').trim();
+  if (!cleaned) return '';
+  if (cleaned.startsWith('+')) {
+    return /^\+[1-9]\d{7,14}$/.test(cleaned) ? cleaned : '';
+  }
+  if (cleaned.startsWith('00')) {
+    const plus = `+${cleaned.slice(2)}`;
+    return /^\+[1-9]\d{7,14}$/.test(plus) ? plus : '';
+  }
+  if (cleaned.startsWith('0')) {
+    const e164 = `+84${cleaned.slice(1)}`;
+    return /^\+84\d{8,10}$/.test(e164) ? e164 : '';
+  }
+  if (cleaned.startsWith('84')) {
+    const e164 = `+${cleaned}`;
+    return /^\+84\d{8,10}$/.test(e164) ? e164 : '';
+  }
+  if (/^\d{9,10}$/.test(cleaned)) {
+    return `+84${cleaned}`;
+  }
+  return '';
+}
 
 export async function fetchUserProfiles(uid: string): Promise<{
   publicUser: PublicUser | null;
@@ -207,6 +232,7 @@ export async function registerUserAndWorkspace(params: {
       feedbackScheduledAtMs: 0,
       instantFeedbackNote: '',
       assistantFeedback: '',
+      assistantFeedbackPhotoUrl: '',
       scoreLabel: '',
       gradedBy: '',
       createdAt: serverTimestamp(),
@@ -275,6 +301,51 @@ export async function linkStudentByCode(
   return studentId;
 }
 
+export async function verifyStudentLinkCode(rawCode: string): Promise<{
+  linkCode: string;
+  studentId: string;
+  studentName: string;
+  grade: string;
+}> {
+  const linkCode = rawCode.trim().toUpperCase().replace(/[^A-Z0-9]/g, '');
+  if (linkCode.length < 6 || linkCode.length > 12) {
+    throw new Error('Mã kết nối phải gồm 6–12 ký tự chữ hoa và số (ví dụ: NH842K19).');
+  }
+  const inviteSnap = await getDoc(doc(db, 'student_invites', linkCode));
+  if (!inviteSnap.exists()) {
+    throw new Error('Không tìm thấy mã kết nối học sinh này. Vui lòng kiểm tra lại.');
+  }
+  const data = inviteSnap.data();
+  return {
+    linkCode,
+    studentId: String(data.studentId || ''),
+    studentName: String(data.studentName || 'Học sinh'),
+    grade: String(data.grade || ''),
+  };
+}
+
+export async function cleanupAnonymousParentSession(
+  uid: string,
+  students: StudentProfile[],
+): Promise<void> {
+  const batch = writeBatch(db);
+  for (const stu of students) {
+    if (stu.parentUid === uid) {
+      batch.update(doc(db, 'students', stu.id), {
+        parentUid: '',
+        updatedAt: serverTimestamp(),
+      });
+    }
+  }
+  batch.delete(doc(db, 'users_public', uid));
+  batch.delete(doc(db, 'users_private', uid));
+  try {
+    await batch.commit();
+  } catch (error) {
+    console.warn('Cleanup anonymous parent session skipped:', error);
+  }
+}
+
 export async function createNewStudentByAdult(params: {
   uid: string;
   role: 'parent' | 'assistant';
@@ -340,6 +411,7 @@ export async function createNewStudentByAdult(params: {
     feedbackScheduledAtMs: 0,
     instantFeedbackNote: '',
     assistantFeedback: '',
+    assistantFeedbackPhotoUrl: '',
     scoreLabel: '',
     gradedBy: '',
     createdAt: serverTimestamp(),
@@ -412,6 +484,7 @@ export async function createSelfStudentWorkspace(params: {
     feedbackScheduledAtMs: 0,
     instantFeedbackNote: '',
     assistantFeedback: '',
+    assistantFeedbackPhotoUrl: '',
     scoreLabel: '',
     gradedBy: '',
     createdAt: serverTimestamp(),
@@ -458,6 +531,7 @@ export async function createAssignment(params: {
       feedbackScheduledAtMs: 0,
       instantFeedbackNote: '',
       assistantFeedback: '',
+      assistantFeedbackPhotoUrl: '',
       scoreLabel: '',
       gradedBy: '',
       createdAt: serverTimestamp(),
@@ -468,17 +542,143 @@ export async function createAssignment(params: {
   }
 }
 
+export interface ParsedTeacherTask {
+  subject: string;
+  title: string;
+  description: string;
+  dueLabel: string;
+  type: AssignmentType;
+}
+
+export async function parseTeacherMessageToTasks(params: {
+  messageText: string;
+  imageDataUrls: string[];
+  studentName: string;
+  studentGrade: string;
+}): Promise<{ summaryNote: string; tasks: ParsedTeacherTask[] }> {
+  const response = await fetch('/api/parse-teacher-message', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      messageText: params.messageText,
+      images: params.imageDataUrls.map((dataUrl) => ({ dataUrl })),
+      studentName: params.studentName,
+      studentGrade: params.studentGrade,
+    }),
+  });
+
+  const payload = (await response.json().catch(() => ({}))) as {
+    summaryNote?: string;
+    tasks?: ParsedTeacherTask[];
+    error?: string;
+  };
+
+  if (!response.ok) {
+    throw new Error(
+      payload.error || 'Không thể phân tích tin nhắn giáo viên lúc này. Vui lòng thử lại.',
+    );
+  }
+
+  return {
+    summaryNote: payload.summaryNote || '',
+    tasks: Array.isArray(payload.tasks) ? payload.tasks : [],
+  };
+}
+
+export async function createAssignmentsBatch(params: {
+  student: StudentProfile;
+  createdBy: string;
+  tasks: ParsedTeacherTask[];
+}): Promise<string[]> {
+  if (params.tasks.length === 0) return [];
+
+  // Read latest membership UIDs from students doc so Firestore security rules always match
+  let studentUid = params.student.studentUid;
+  let parentUid = params.student.parentUid;
+  let assistantUid = params.student.assistantUid;
+  try {
+    const freshSnap = await getDoc(doc(db, 'students', params.student.id));
+    if (freshSnap.exists()) {
+      const data = freshSnap.data();
+      studentUid = String(data.studentUid || '');
+      parentUid = String(data.parentUid || '');
+      assistantUid = String(data.assistantUid || '');
+    }
+  } catch {
+    // Fallback to client snapshot values
+  }
+
+  const batch = writeBatch(db);
+  const createdIds: string[] = [];
+
+  for (const task of params.tasks.slice(0, 15)) {
+    const cleanTitle = task.title.trim().slice(0, 120);
+    if (!cleanTitle) continue;
+    const id = generateDocId('asg');
+    createdIds.push(id);
+    batch.set(doc(db, 'assignments', id), {
+      id,
+      studentId: params.student.id,
+      studentUid,
+      parentUid,
+      assistantUid,
+      createdBy: params.createdBy,
+      type: task.type === 'extra' ? 'extra' : 'today',
+      subject: task.subject.trim().slice(0, 40) || 'Tổng hợp',
+      title: cleanTitle,
+      description: task.description.trim().slice(0, 800),
+      dueLabel: task.dueLabel.trim().slice(0, 60) || 'Hôm nay',
+      status: 'pending',
+      photoDataUrl: '',
+      studentNote: '',
+      submittedAtMs: 0,
+      feedbackScheduledAtMs: 0,
+      instantFeedbackNote: '',
+      assistantFeedback: '',
+      assistantFeedbackPhotoUrl: '',
+      scoreLabel: '',
+      gradedBy: '',
+      createdAt: serverTimestamp(),
+      updatedAt: serverTimestamp(),
+    });
+  }
+
+  if (createdIds.length === 0) return [];
+
+  try {
+    await batch.commit();
+  } catch (error) {
+    handleFirestoreError(error, OperationType.WRITE, `assignments/${createdIds[0]}`);
+  }
+
+  return createdIds;
+}
+
+export async function deletePendingAssignment(assignmentId: string): Promise<void> {
+  const path = `assignments/${assignmentId}`;
+  try {
+    await deleteDoc(doc(db, 'assignments', assignmentId));
+  } catch (error) {
+    handleFirestoreError(error, OperationType.DELETE, path);
+  }
+}
+
 export async function submitAssignmentPhoto(params: {
   assignmentId: string;
   photoDataUrl: string;
   studentNote: string;
   assistantOnline: boolean;
+  isResubmission?: boolean;
 }): Promise<void> {
   const nowMs = Date.now();
   const feedbackScheduledAtMs = params.assistantOnline ? nowMs : nowMs + 60 * 60 * 1000;
-  const instantFeedbackNote = params.assistantOnline
-    ? 'Trợ lý đang trực tuyến — Đã tiếp nhận bài ảnh của bạn! Trợ lý đang xem từng bước giải và sẽ gửi điểm chấm ngay.'
-    : 'Hệ thống đã ghi nhận bài nộp và tích hoàn thành tạm thời. Trợ lý sẽ gửi nhận xét chi tiết sau 1 giờ hoặc ngay khi trực tuyến.';
+  const instantFeedbackNote = params.isResubmission
+    ? params.assistantOnline
+      ? 'Trợ lý đang trực tuyến — Đã tiếp nhận bài nộp lại của bạn! Trợ lý đang xem lại bài mới.'
+      : 'Hệ thống đã ghi nhận bài nộp lại của bạn. Trợ lý sẽ xem và chấm lại chi tiết sau 1 giờ hoặc ngay khi trực tuyến.'
+    : params.assistantOnline
+      ? 'Trợ lý đang trực tuyến — Đã tiếp nhận bài ảnh của bạn! Trợ lý đang xem từng bước giải và sẽ gửi điểm chấm ngay.'
+      : 'Hệ thống đã ghi nhận bài nộp và tích hoàn thành tạm thời. Trợ lý sẽ gửi nhận xét chi tiết sau 1 giờ hoặc ngay khi trực tuyến.';
 
   if (params.photoDataUrl.length > 260000) {
     throw new Error('Dung lượng ảnh vượt quá giới hạn. Vui lòng chụp lại gần hơn.');
@@ -502,15 +702,35 @@ export async function submitAssignmentPhoto(params: {
 export async function gradeAssignment(params: {
   assignmentId: string;
   gradedBy: string;
+  status?: 'graded' | 'needs_revision';
   scoreLabel: string;
   assistantFeedback: string;
+  assistantFeedbackPhotoUrl?: string;
 }): Promise<void> {
+  const targetStatus = params.status === 'needs_revision' ? 'needs_revision' : 'graded';
+  const cleanPhotoUrl = (params.assistantFeedbackPhotoUrl || '').trim();
+  if (cleanPhotoUrl.length > 260000) {
+    throw new Error('Dung lượng ảnh chấm bài vượt quá giới hạn. Vui lòng chọn ảnh nhẹ hơn.');
+  }
+
+  const trimmedFeedback = params.assistantFeedback.trim().slice(0, 1000);
+  const fallbackFeedback =
+    targetStatus === 'needs_revision'
+      ? 'Bài làm chưa đạt yêu cầu, vui lòng xem lại hướng dẫn/ảnh chấm và nộp lại bài.'
+      : cleanPhotoUrl
+        ? 'Trợ lý đã đính kèm ảnh chấm bài chi tiết.'
+        : 'Hoàn thành bài tập.';
+
+  const defaultScore =
+    targetStatus === 'needs_revision' ? 'Chưa đạt · Cần nộp lại' : 'Hoàn thành tốt';
+
   const path = `assignments/${params.assignmentId}`;
   try {
     await updateDoc(doc(db, 'assignments', params.assignmentId), {
-      status: 'graded',
-      scoreLabel: params.scoreLabel.trim().slice(0, 40) || 'Hoàn thành tốt',
-      assistantFeedback: params.assistantFeedback.trim().slice(0, 1000),
+      status: targetStatus,
+      scoreLabel: params.scoreLabel.trim().slice(0, 40) || defaultScore,
+      assistantFeedback: trimmedFeedback || fallbackFeedback,
+      assistantFeedbackPhotoUrl: cleanPhotoUrl,
       gradedBy: params.gradedBy,
       updatedAt: serverTimestamp(),
     });
@@ -815,6 +1035,22 @@ export async function deleteAccountAndData(params: {
     throw new Error('Phiên đăng nhập không hợp lệ.');
   }
 
+  const isNonGoogleUser =
+    currentUser.isAnonymous ||
+    (currentUser.providerData.some((p) => p.providerId === 'phone') &&
+      !currentUser.providerData.some((p) => p.providerId === 'google.com'));
+
+  if (isNonGoogleUser && !currentUser.isAnonymous) {
+    const lastSignInMs = currentUser.metadata?.lastSignInTime
+      ? Date.parse(currentUser.metadata.lastSignInTime)
+      : 0;
+    if (!lastSignInMs || Date.now() - lastSignInMs > 4 * 60 * 1000) {
+      throw new Error(
+        'Phiên đăng nhập số điện thoại đã quá 4 phút. Để bảo mật trước khi xóa tài khoản, vui lòng đăng xuất rồi đăng nhập lại và thử lại.',
+      );
+    }
+  }
+
   // Ensure recent auth before destructive deletion if needed
   const runAuthDeletion = async () => {
     try {
@@ -822,6 +1058,11 @@ export async function deleteAccountAndData(params: {
     } catch (err) {
       const code = (err as { code?: string })?.code || '';
       if (code === 'auth/requires-recent-login') {
+        if (isNonGoogleUser) {
+          throw new Error(
+            'Phiên đăng nhập đã hết hạn xác thực gần đây. Vui lòng đăng xuất rồi đăng nhập lại để xóa tài khoản.',
+          );
+        }
         await reauthenticateWithPopup(currentUser, googleProvider);
         await deleteUser(currentUser);
       } else {

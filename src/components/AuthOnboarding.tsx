@@ -10,9 +10,9 @@ import {
   CheckCheck,
   CheckCircle2,
   Clock,
-  Flame,
   GraduationCap,
   HeartHandshake,
+  KeyRound,
   Lightbulb,
   LogOut,
   MessageSquareText,
@@ -37,7 +37,16 @@ interface AuthOnboardingProps {
   firebaseUser: User | null;
   authLoading: boolean;
   authError: string | null;
+  preferredRole: UserRole;
+  onChangePreferredRole: (role: UserRole) => void;
+  onClearAuthError: () => void;
   onGoogleSignIn: () => Promise<void>;
+  onParentCodeSignIn: (params: {
+    linkCode?: string;
+    displayName?: string;
+    studentName?: string;
+    grade?: string;
+  }) => Promise<void>;
   onSignOut: () => Promise<void>;
   onCompleteRegistration: (data: {
     displayName: string;
@@ -127,11 +136,19 @@ export const AuthOnboarding: React.FC<AuthOnboardingProps> = ({
   firebaseUser,
   authLoading,
   authError,
+  preferredRole,
+  onChangePreferredRole,
+  onClearAuthError,
   onGoogleSignIn,
+  onParentCodeSignIn,
   onSignOut,
   onCompleteRegistration,
 }) => {
-  const [selectedRole, setSelectedRole] = useState<UserRole>('student');
+  const isCodeSession = Boolean(firebaseUser?.isAnonymous);
+
+  const [selectedRole, setSelectedRole] = useState<UserRole>(
+    isCodeSession ? 'parent' : preferredRole,
+  );
   const [selectedMood, setSelectedMood] = useState<MascotMood>('happy');
   const [displayName, setDisplayName] = useState(firebaseUser?.displayName || '');
   const [phone, setPhone] = useState('');
@@ -143,6 +160,15 @@ export const AuthOnboarding: React.FC<AuthOnboardingProps> = ({
   const [formError, setFormError] = useState<string | null>(null);
   const [soundOn, setSoundOn] = useState<boolean>(() => isSoundEnabled());
 
+  // Parent child-code sign-in states
+  const [parentCodeInput, setParentCodeInput] = useState('');
+  const [parentNameInput, setParentNameInput] = useState('');
+  const [parentCreateMode, setParentCreateMode] = useState(false);
+  const [parentStudentName, setParentStudentName] = useState('');
+  const [parentStudentGrade, setParentStudentGrade] = useState('Lớp 8');
+  const [parentLoading, setParentLoading] = useState(false);
+  const [parentError, setParentError] = useState<string | null>(null);
+
   const handleToggleSound = () => {
     const next = !soundOn;
     setSoundEnabled(next);
@@ -152,16 +178,89 @@ export const AuthOnboarding: React.FC<AuthOnboardingProps> = ({
     }
   };
 
+  const selectRole = (role: UserRole) => {
+    setSelectedRole(role);
+    onChangePreferredRole(role);
+    setParentError(null);
+    setFormError(null);
+    onClearAuthError();
+  };
+
+  React.useEffect(() => {
+    if (isCodeSession) {
+      setSelectedRole('parent');
+      onChangePreferredRole('parent');
+    }
+  }, [isCodeSession, onChangePreferredRole]);
+
   React.useEffect(() => {
     if (firebaseUser?.displayName && !displayName) {
       setDisplayName(firebaseUser.displayName);
     }
   }, [firebaseUser, displayName]);
 
+  const handleJumpToParentCode = () => {
+    selectRole('parent');
+    setTimeout(() => {
+      document.getElementById('start-panel')?.scrollIntoView({ behavior: 'smooth' });
+      document.getElementById('parent-link-code-input')?.focus();
+    }, 100);
+  };
+
+  const handleSwitchToParentFromGoogle = async () => {
+    await onSignOut();
+    selectRole('parent');
+    setTimeout(() => {
+      document.getElementById('start-panel')?.scrollIntoView({ behavior: 'smooth' });
+      document.getElementById('parent-link-code-input')?.focus();
+    }, 160);
+  };
+
+  const handleSwitchToGoogleFromCode = async () => {
+    await onSignOut();
+    selectRole('student');
+    setTimeout(() => {
+      document.getElementById('start-panel')?.scrollIntoView({ behavior: 'smooth' });
+    }, 160);
+  };
+
+  const handleParentCodeSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setParentError(null);
+    onClearAuthError();
+    setParentLoading(true);
+    try {
+      await onParentCodeSignIn({
+        linkCode: parentCreateMode ? '' : parentCodeInput,
+        displayName: parentNameInput,
+        studentName: parentCreateMode ? parentStudentName : '',
+        grade: parentCreateMode ? parentStudentGrade : 'Lớp 8',
+      });
+    } catch (err) {
+      setParentError(
+        err instanceof Error ? err.message : 'Không thể đăng nhập bằng mã kết nối.',
+      );
+    } finally {
+      setParentLoading(false);
+    }
+  };
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setFormError(null);
 
+    if (selectedRole === 'parent' && !isCodeSession) {
+      setFormError(
+        'Phụ huynh chỉ cần nhập mã kết nối của con (NH...) để đăng nhập, không dùng email. Vui lòng chuyển sang đăng nhập bằng mã NH...',
+      );
+      return;
+    }
+    if (selectedRole !== 'parent' && isCodeSession) {
+      setFormError(
+        'Phiên mã kết nối dành riêng cho Phụ huynh. Học sinh / Trợ lý vui lòng đổi sang đăng nhập Google.',
+      );
+      return;
+    }
     if (!displayName.trim()) {
       setFormError('Vui lòng nhập họ và tên của bạn.');
       return;
@@ -193,6 +292,9 @@ export const AuthOnboarding: React.FC<AuthOnboardingProps> = ({
   };
 
   const activeMoodMeta = MASCOT_MOODS.find((m) => m.mood === selectedMood) || MASCOT_MOODS[0];
+  const roleMismatch =
+    (selectedRole === 'parent' && !isCodeSession) ||
+    (selectedRole !== 'parent' && isCodeSession);
 
   const renderRegistrationForm = () => (
     <form onSubmit={handleSubmit} className="space-y-5">
@@ -200,15 +302,21 @@ export const AuthOnboarding: React.FC<AuthOnboardingProps> = ({
         <div>
           <p className="text-xs font-bold text-[#C45A15]">Hoàn tất hồ sơ NhịpHọc</p>
           <h2 className="text-xl font-extrabold text-[#231E18] mt-0.5">
-            Chọn vai trò để vào không gian làm việc
+            {isCodeSession
+              ? 'Hoàn tất thông tin Phụ huynh'
+              : 'Chọn vai trò để vào không gian làm việc'}
           </h2>
         </div>
         <MascotAvatar size="sm" mood="happy" />
       </div>
 
       <div className="text-xs text-[#6B6154] bg-[#FDF3D0]/70 border border-[#E5DBC4] rounded-xl px-3.5 py-2.5 flex items-center justify-between gap-2">
-        <span className="truncate">{firebaseUser?.email}</span>
-        <span className="font-bold text-[#C45A15] shrink-0">Đã xác thực</span>
+        <span className="truncate font-medium text-[#231E18]">
+          {isCodeSession ? 'Phiên đăng nhập Phụ huynh (Mã kết nối)' : firebaseUser?.email}
+        </span>
+        <span className="font-bold text-[#C45A15] shrink-0">
+          {isCodeSession ? 'Không dùng email' : 'Đã xác thực Google'}
+        </span>
       </div>
 
       <div>
@@ -222,7 +330,7 @@ export const AuthOnboarding: React.FC<AuthOnboardingProps> = ({
               <button
                 key={item.role}
                 type="button"
-                onClick={() => setSelectedRole(item.role)}
+                onClick={() => selectRole(item.role)}
                 className={`py-2 px-3 rounded-xl text-xs font-bold transition-colors whitespace-nowrap ${
                   active
                     ? 'bg-[#C45A15] text-white shadow-sm'
@@ -234,6 +342,41 @@ export const AuthOnboarding: React.FC<AuthOnboardingProps> = ({
             );
           })}
         </div>
+
+        {selectedRole === 'parent' && !isCodeSession && (
+          <div className="mt-3 rounded-xl border border-[#E5C99B] bg-[#FDF3D0] p-3.5 space-y-2.5">
+            <p className="text-xs text-[#4F463B] leading-relaxed">
+              <strong>Phụ huynh không dùng email</strong> — chỉ cần nhập mã kết nối của con (
+              <span className="font-mono font-semibold">NH...</span>) để vào thẳng giao diện Phụ
+              huynh.
+            </p>
+            <button
+              type="button"
+              onClick={handleSwitchToParentFromGoogle}
+              className="inline-flex items-center gap-2 px-3.5 py-2 rounded-xl bg-[#C45A15] text-white text-xs font-bold hover:bg-[#AA4C0F] transition-colors"
+            >
+              <KeyRound className="w-3.5 h-3.5" />
+              Đăng xuất &amp; Vào Phụ huynh bằng mã NH...
+            </button>
+          </div>
+        )}
+
+        {selectedRole !== 'parent' && isCodeSession && (
+          <div className="mt-3 rounded-xl border border-[#E5C99B] bg-[#FDF3D0] p-3.5 space-y-2.5">
+            <p className="text-xs text-[#4F463B] leading-relaxed">
+              Phiên hiện tại dành cho <strong>Phụ huynh</strong>. Để vào vai trò Học sinh hoặc Trợ
+              lý, hãy đổi sang tài khoản Google.
+            </p>
+            <button
+              type="button"
+              onClick={handleSwitchToGoogleFromCode}
+              className="inline-flex items-center gap-2 px-3.5 py-2 rounded-xl bg-white border border-[#E5DBC4] text-[#231E18] text-xs font-bold hover:bg-[#F6EFE0] transition-colors"
+            >
+              <LogOut className="w-3.5 h-3.5 text-[#C45A15]" />
+              Đổi sang đăng nhập Google
+            </button>
+          </div>
+        )}
       </div>
 
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
@@ -248,13 +391,13 @@ export const AuthOnboarding: React.FC<AuthOnboardingProps> = ({
             maxLength={80}
             value={displayName}
             onChange={(e) => setDisplayName(e.target.value)}
-            placeholder="Nguyễn Minh Anh"
+            placeholder={selectedRole === 'parent' ? 'Phụ huynh bé Minh Anh' : 'Nguyễn Minh Anh'}
             className="w-full rounded-xl border border-[#E5DBC4] bg-white px-3.5 py-2.5 text-sm text-[#231E18] focus:outline-none focus:ring-2 focus:ring-[#C45A15]/25 focus:border-[#C45A15]"
           />
         </div>
         <div>
           <label htmlFor="reg-phone" className="block text-xs font-semibold text-[#231E18] mb-1.5">
-            Số điện thoại
+            Số điện thoại (tùy chọn)
           </label>
           <input
             id="reg-phone"
@@ -378,7 +521,7 @@ export const AuthOnboarding: React.FC<AuthOnboardingProps> = ({
 
       <button
         type="submit"
-        disabled={submitting}
+        disabled={submitting || roleMismatch}
         className="w-full py-3.5 px-5 rounded-2xl bg-[#C45A15] text-white text-sm font-bold hover:bg-[#AA4C0F] disabled:opacity-50 transition-colors flex items-center justify-center gap-2"
       >
         <span>{submitting ? 'Đang khởi tạo không gian...' : 'Hoàn tất & Vào NhịpHọc'}</span>
@@ -491,19 +634,30 @@ export const AuthOnboarding: React.FC<AuthOnboardingProps> = ({
                 nhận xét đều đồng bộ theo thời gian thực.
               </p>
 
-              <div className="flex flex-wrap items-center gap-4 pt-1">
+              <div className="flex flex-wrap items-center gap-3 pt-1">
                 {!firebaseUser ? (
-                  <button
-                    type="button"
-                    onClick={onGoogleSignIn}
-                    disabled={authLoading}
-                    className="inline-flex items-center gap-2.5 px-6 py-3.5 rounded-2xl bg-[#C45A15] text-white text-sm font-bold hover:bg-[#AA4C0F] disabled:opacity-50 transition-colors shadow-sm whitespace-nowrap"
-                  >
-                    <span>
-                      {authLoading ? 'Đang mở Google...' : 'Bắt đầu ngay bằng Google'}
-                    </span>
-                    <ArrowRight className="w-4 h-4" />
-                  </button>
+                  <>
+                    <button
+                      type="button"
+                      onClick={handleJumpToParentCode}
+                      className="inline-flex items-center gap-2.5 px-5 py-3.5 rounded-2xl bg-[#C45A15] text-white text-sm font-bold hover:bg-[#AA4C0F] transition-colors shadow-sm whitespace-nowrap"
+                    >
+                      <KeyRound className="w-4 h-4" />
+                      <span>Phụ huynh · Nhập mã kết nối của con</span>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={onGoogleSignIn}
+                      disabled={authLoading}
+                      className="inline-flex items-center gap-2.5 px-5 py-3.5 rounded-2xl border border-[#E5DBC4] bg-white text-[#231E18] text-sm font-bold hover:bg-[#FDF3D0] disabled:opacity-50 transition-colors whitespace-nowrap"
+                    >
+                      <span>
+                        {authLoading ? 'Đang mở Google...' : 'Học sinh / Trợ lý · Google'}
+                      </span>
+                      <ArrowRight className="w-4 h-4 text-[#C45A15]" />
+                    </button>
+                  </>
                 ) : (
                   <a
                     href="#features"
@@ -516,7 +670,7 @@ export const AuthOnboarding: React.FC<AuthOnboardingProps> = ({
 
                 <a
                   href="#guide"
-                  className="inline-flex items-center gap-2 px-5 py-3.5 rounded-2xl border border-[#E5DBC4] bg-white text-sm font-semibold text-[#231E18] hover:bg-[#FDF3D0] transition-colors whitespace-nowrap"
+                  className="inline-flex items-center gap-2 px-4 py-3.5 rounded-2xl text-sm font-semibold text-[#5C5347] hover:text-[#C45A15] transition-colors whitespace-nowrap"
                 >
                   Xem hướng dẫn 3 bước
                 </a>
@@ -829,9 +983,10 @@ export const AuthOnboarding: React.FC<AuthOnboardingProps> = ({
                   Đăng nhập & kết nối bằng mã NH
                 </h3>
                 <p className="text-sm text-[#5C5347] leading-relaxed">
-                  Đăng nhập bằng Google và chọn vai trò Học sinh, Phụ huynh hoặc Trợ lý. Dùng mã{' '}
-                  <span className="font-mono font-semibold text-[#231E18]">NH...</span> để liên kết
-                  cùng một hồ sơ học tập.
+                  Phụ huynh chỉ cần nhập mã{' '}
+                  <span className="font-mono font-semibold text-[#231E18]">NH...</span> của con để
+                  đăng nhập ngay; Học sinh &amp; Trợ lý đăng nhập bằng Google để tạo và quản lý hồ
+                  sơ học tập.
                 </p>
               </div>
 
@@ -883,7 +1038,7 @@ export const AuthOnboarding: React.FC<AuthOnboardingProps> = ({
                         <button
                           key={item.role}
                           type="button"
-                          onClick={() => setSelectedRole(item.role)}
+                          onClick={() => selectRole(item.role)}
                           className={`py-2.5 px-3 rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-1.5 whitespace-nowrap ${
                             active
                               ? 'bg-[#C45A15] text-white shadow-sm'
@@ -925,25 +1080,171 @@ export const AuthOnboarding: React.FC<AuthOnboardingProps> = ({
                     </ul>
                   </div>
 
-                  <button
-                    type="button"
-                    onClick={onGoogleSignIn}
-                    disabled={authLoading}
-                    className="w-full py-3.5 px-5 rounded-2xl bg-[#C45A15] text-white text-sm font-bold hover:bg-[#AA4C0F] disabled:opacity-50 transition-colors flex items-center justify-center gap-3 shadow-sm"
-                  >
-                    <ShieldCheck className="w-4 h-4 text-[#FDF3D0]" />
-                    <span>
-                      {authLoading ? 'Đang mở đăng nhập...' : 'Đăng nhập / Đăng ký bằng Google'}
-                    </span>
-                    <ArrowRight className="w-4 h-4" />
-                  </button>
+                  {selectedRole === 'parent' ? (
+                    <div className="rounded-2xl border border-[#E5DBC4] bg-white p-5 space-y-4 shadow-sm">
+                      <div>
+                        <p className="text-sm font-extrabold text-[#231E18] flex items-center gap-2">
+                          <KeyRound className="w-4 h-4 text-[#C45A15]" />
+                          {parentCreateMode
+                            ? 'Tạo hồ sơ học sinh mới (Phụ huynh)'
+                            : 'Đăng nhập Phụ huynh bằng Mã kết nối của con'}
+                        </p>
+                        <p className="text-xs text-[#6B6154] mt-0.5">
+                          {parentCreateMode
+                            ? 'Tạo nhanh hồ sơ mới và nhận mã NH... để kết nối với máy của con.'
+                            : 'Không cần email hay OTP — chỉ cần nhập mã NH... hiển thị ở màn hình của con.'}
+                        </p>
+                      </div>
+
+                      <form onSubmit={handleParentCodeSubmit} className="space-y-3">
+                        {!parentCreateMode ? (
+                          <div>
+                            <label
+                              htmlFor="parent-link-code-input"
+                              className="block text-xs font-semibold text-[#231E18] mb-1.5"
+                            >
+                              Mã kết nối của con (ví dụ: NH842K19)
+                            </label>
+                            <input
+                              id="parent-link-code-input"
+                              type="text"
+                              required
+                              maxLength={12}
+                              value={parentCodeInput}
+                              onChange={(e) => setParentCodeInput(e.target.value.toUpperCase())}
+                              placeholder="NH842K19"
+                              className="w-full rounded-xl border border-[#E5DBC4] bg-[#FBF8F1] px-3.5 py-2.5 text-base font-mono font-bold uppercase tracking-[0.2em] text-[#231E18] focus:outline-none focus:ring-2 focus:ring-[#C45A15]/25 focus:border-[#C45A15]"
+                            />
+                          </div>
+                        ) : (
+                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                            <div>
+                              <label
+                                htmlFor="parent-new-student-name"
+                                className="block text-xs font-semibold text-[#231E18] mb-1.5"
+                              >
+                                Tên của con
+                              </label>
+                              <input
+                                id="parent-new-student-name"
+                                type="text"
+                                required
+                                maxLength={80}
+                                value={parentStudentName}
+                                onChange={(e) => setParentStudentName(e.target.value)}
+                                placeholder="Bé Minh Anh"
+                                className="w-full rounded-xl border border-[#E5DBC4] bg-[#FBF8F1] px-3.5 py-2.5 text-sm text-[#231E18] focus:outline-none focus:ring-2 focus:ring-[#C45A15]/25 focus:border-[#C45A15]"
+                              />
+                            </div>
+                            <div>
+                              <label
+                                htmlFor="parent-new-student-grade"
+                                className="block text-xs font-semibold text-[#231E18] mb-1.5"
+                              >
+                                Lớp / Khối học
+                              </label>
+                              <input
+                                id="parent-new-student-grade"
+                                type="text"
+                                maxLength={40}
+                                value={parentStudentGrade}
+                                onChange={(e) => setParentStudentGrade(e.target.value)}
+                                placeholder="Lớp 8"
+                                className="w-full rounded-xl border border-[#E5DBC4] bg-[#FBF8F1] px-3.5 py-2.5 text-sm text-[#231E18] focus:outline-none focus:ring-2 focus:ring-[#C45A15]/25 focus:border-[#C45A15]"
+                              />
+                            </div>
+                          </div>
+                        )}
+
+                        <div>
+                          <label
+                            htmlFor="parent-display-name-input"
+                            className="block text-xs font-semibold text-[#231E18] mb-1.5"
+                          >
+                            Tên gọi của phụ huynh (tùy chọn)
+                          </label>
+                          <input
+                            id="parent-display-name-input"
+                            type="text"
+                            maxLength={80}
+                            value={parentNameInput}
+                            onChange={(e) => setParentNameInput(e.target.value)}
+                            placeholder="Ví dụ: Mẹ Minh Anh (để trống vẫn vào ngay)"
+                            className="w-full rounded-xl border border-[#E5DBC4] bg-[#FBF8F1] px-3.5 py-2.5 text-sm text-[#231E18] focus:outline-none focus:ring-2 focus:ring-[#C45A15]/25 focus:border-[#C45A15]"
+                          />
+                        </div>
+
+                        <button
+                          type="submit"
+                          disabled={parentLoading}
+                          className="w-full py-3.5 px-5 rounded-2xl bg-[#C45A15] text-white text-sm font-bold hover:bg-[#AA4C0F] disabled:opacity-50 transition-colors flex items-center justify-center gap-2.5 shadow-sm"
+                        >
+                          <KeyRound className="w-4 h-4 text-[#FDF3D0]" />
+                          <span>
+                            {parentLoading
+                              ? 'Đang mở không gian Phụ huynh...'
+                              : parentCreateMode
+                                ? 'Tạo hồ sơ & Vào không gian Phụ huynh'
+                                : 'Đăng nhập không gian Phụ huynh'}
+                          </span>
+                          <ArrowRight className="w-4 h-4" />
+                        </button>
+                      </form>
+
+                      <div className="text-center pt-1">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setParentCreateMode((v) => !v);
+                            setParentError(null);
+                          }}
+                          className="text-xs font-semibold text-[#C45A15] hover:underline"
+                        >
+                          {parentCreateMode
+                            ? '← Đã có mã NH... của con? Quay lại nhập mã'
+                            : 'Chưa có mã kết nối của con? Tạo hồ sơ mới ngay'}
+                        </button>
+                      </div>
+
+                      {(parentError || authError) && (
+                        <div className="rounded-xl border border-red-200 bg-red-50 px-3.5 py-2.5 text-xs text-red-700 leading-relaxed">
+                          {parentError || authError}
+                        </div>
+                      )}
+                    </div>
+                  ) : (
+                    <div className="space-y-2.5">
+                      <button
+                        type="button"
+                        onClick={onGoogleSignIn}
+                        disabled={authLoading}
+                        className="w-full py-3.5 px-5 rounded-2xl bg-[#C45A15] text-white text-sm font-bold hover:bg-[#AA4C0F] disabled:opacity-50 transition-colors flex items-center justify-center gap-3 shadow-sm"
+                      >
+                        <ShieldCheck className="w-4 h-4 text-[#FDF3D0]" />
+                        <span>
+                          {authLoading ? 'Đang mở đăng nhập...' : 'Đăng nhập / Đăng ký bằng Google'}
+                        </span>
+                        <ArrowRight className="w-4 h-4" />
+                      </button>
+                      <p className="text-center text-xs text-[#6B6154]">
+                        Phụ huynh không cần email —{' '}
+                        <button
+                          type="button"
+                          onClick={() => selectRole('parent')}
+                          className="font-bold text-[#C45A15] hover:underline"
+                        >
+                          chọn mục Phụ huynh để vào bằng mã kết nối của con
+                        </button>
+                      </p>
+                    </div>
+                  )}
                 </div>
               </div>
             ) : (
               <div className="rounded-3xl border border-[#E5DBC4] bg-[#FDF3D0]/55 p-8 text-center space-y-4">
                 <MascotAvatar size="lg" mood="happy" className="mx-auto" />
                 <h2 className="text-xl font-extrabold text-[#231E18]">
-                  Bạn đã xác thực Google thành công
+                  Bạn đã xác thực tài khoản thành công
                 </h2>
                 <p className="text-sm text-[#5C5347] max-w-md mx-auto">
                   Hãy hoàn tất thông tin vai trò ở biểu mẫu phía trên đầu trang để bước vào không

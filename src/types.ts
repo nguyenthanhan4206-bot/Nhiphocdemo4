@@ -63,7 +63,7 @@ export interface StudentProfile {
 }
 
 export type AssignmentType = 'today' | 'extra';
-export type AssignmentStatus = 'pending' | 'submitted' | 'graded';
+export type AssignmentStatus = 'pending' | 'submitted' | 'needs_revision' | 'graded';
 
 export interface Assignment {
   id: string;
@@ -84,6 +84,7 @@ export interface Assignment {
   feedbackScheduledAtMs: number;
   instantFeedbackNote: string;
   assistantFeedback: string;
+  assistantFeedbackPhotoUrl?: string;
   scoreLabel: string;
   gradedBy: string;
   createdAt: Timestamp;

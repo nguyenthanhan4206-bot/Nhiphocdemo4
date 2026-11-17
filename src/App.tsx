@@ -1,5 +1,12 @@
 import React, { Component, ErrorInfo, ReactNode, useCallback, useEffect, useRef, useState } from 'react';
-import { onAuthStateChanged, signInWithPopup, signOut, User } from 'firebase/auth';
+import {
+  deleteUser,
+  onAuthStateChanged,
+  signInAnonymously,
+  signInWithPopup,
+  signOut,
+  User,
+} from 'firebase/auth';
 import { collection, onSnapshot, query, where } from 'firebase/firestore';
 import { auth, db, googleProvider, handleFirestoreError } from './firebase';
 import {
@@ -14,12 +21,14 @@ import {
   UserRole,
 } from './types';
 import {
+  cleanupAnonymousParentSession,
   createSelfStudentWorkspace,
   deleteAccountAndData,
   fetchUserProfiles,
   linkStudentByCode,
   registerUserAndWorkspace,
   syncStudentMembershipAcrossDocs,
+  verifyStudentLinkCode,
 } from './services/nhiphocService';
 import { AuthOnboarding } from './components/AuthOnboarding';
 import { StudentDashboard, StudentTab } from './components/StudentDashboard';
@@ -129,6 +138,10 @@ function NhiphocApp() {
   const [studentOpenMessagesNonce, setStudentOpenMessagesNonce] = useState(0);
   const toastSeqRef = useRef(0);
 
+  // Preferred role on onboarding / switching accounts
+  const [preferredRole, setPreferredRole] = useState<UserRole>('student');
+  const pendingAnonymousSetupRef = useRef<boolean>(false);
+
   // Fallback workspace link/create state if user has no student yet
   const [recoveryCode, setRecoveryCode] = useState('');
   const [recoveryError, setRecoveryError] = useState<string | null>(null);
@@ -188,11 +201,16 @@ function NhiphocApp() {
         return;
       }
 
+      if (user.isAnonymous && pendingAnonymousSetupRef.current) {
+        return;
+      }
+
       setProfileLoading(true);
       try {
         const { publicUser: loaded } = await fetchUserProfiles(user.uid);
         setPublicUser(loaded);
       } catch (err) {
+        setPublicUser(null);
         setAuthError(err instanceof Error ? err.message : 'Không tải được hồ sơ người dùng.');
       } finally {
         setProfileLoading(false);
@@ -244,22 +262,15 @@ function NhiphocApp() {
           return;
         }
 
+        const addedForStudent: Assignment[] = [];
+
         snap.docChanges().forEach((change) => {
           const a = change.doc.data() as Assignment;
           const prevStatus = knownAssignmentStatus.get(a.id);
 
           if (change.type === 'added' && !knownAssignmentStatus.has(a.id)) {
             if (publicUser.role === 'student' && a.createdBy !== uid) {
-              const targetTab: StudentTab = a.type === 'extra' ? 'extra' : 'today';
-              pushToast({
-                category: 'assignment',
-                title: a.type === 'extra' ? 'Có bài tập bổ sung mới' : 'Có bài tập mới hôm nay',
-                message: `${a.subject}: ${a.title}`,
-                actionLabel: 'Xem bài tập',
-                onAction: () => {
-                  setStudentRequestedTab({ tab: targetTab, nonce: Date.now() });
-                },
-              });
+              addedForStudent.push(a);
             }
           } else if (change.type === 'modified') {
             if (publicUser.role === 'student' && prevStatus !== 'graded' && a.status === 'graded') {
@@ -269,20 +280,36 @@ function NhiphocApp() {
                 title: 'Trợ lý đã chấm xong bài tập!',
                 message: a.assistantFeedback
                   ? `${a.title}: "${a.assistantFeedback}"`
-                  : `${a.subject} — ${a.title} đã có nhận xét mới.`,
-                actionLabel: 'Xem nhận xét',
+                  : `${a.subject} — ${a.title} đã có kết quả chấm mới.`,
+                actionLabel: 'Xem kết quả',
                 onAction: () => {
                   setStudentRequestedTab({ tab: targetTab, nonce: Date.now() });
                 },
               });
             } else if (
-              publicUser.role === 'assistant' &&
-              prevStatus === 'pending' &&
-              a.status === 'submitted'
+              publicUser.role === 'student' &&
+              prevStatus !== 'needs_revision' &&
+              a.status === 'needs_revision'
             ) {
+              const targetTab: StudentTab = a.type === 'extra' ? 'extra' : 'today';
               pushToast({
                 category: 'assignment',
-                title: 'Học sinh vừa nộp bài ảnh mới',
+                title: 'Bài tập cần làm lại & nộp lại',
+                message: a.assistantFeedback
+                  ? `${a.title}: "${a.assistantFeedback}"`
+                  : `${a.subject} — ${a.title} chưa đạt yêu cầu, hãy xem góp ý và nộp lại nhé.`,
+                actionLabel: 'Nộp lại ngay',
+                onAction: () => {
+                  setStudentRequestedTab({ tab: targetTab, nonce: Date.now() });
+                },
+              });
+            } else if (publicUser.role === 'assistant' && a.status === 'submitted') {
+              const isResubmitted = prevStatus !== undefined && prevStatus !== 'pending';
+              pushToast({
+                category: 'assignment',
+                title: isResubmitted
+                  ? 'Học sinh vừa nộp lại bài ảnh'
+                  : 'Học sinh vừa nộp bài ảnh mới',
                 message: `${a.subject}: ${a.title}`,
               });
             } else if (
@@ -295,11 +322,50 @@ function NhiphocApp() {
                 title: 'Trợ lý vừa chấm bài cho con',
                 message: `${a.subject}: ${a.title}`,
               });
+            } else if (
+              publicUser.role === 'parent' &&
+              prevStatus !== 'needs_revision' &&
+              a.status === 'needs_revision'
+            ) {
+              pushToast({
+                category: 'assignment',
+                title: 'Trợ lý yêu cầu con nộp lại bài',
+                message: `${a.subject}: ${a.title}`,
+              });
             }
           }
 
           knownAssignmentStatus.set(a.id, a.status);
         });
+
+        if (addedForStudent.length === 1) {
+          const single = addedForStudent[0];
+          const targetTab: StudentTab = single.type === 'extra' ? 'extra' : 'today';
+          pushToast({
+            category: 'assignment',
+            title: single.type === 'extra' ? 'Có bài tập bổ sung mới' : 'Có bài tập mới hôm nay',
+            message: `${single.subject}: ${single.title}`,
+            actionLabel: 'Xem bài tập',
+            onAction: () => {
+              setStudentRequestedTab({ tab: targetTab, nonce: Date.now() });
+            },
+          });
+        } else if (addedForStudent.length > 1) {
+          const hasToday = addedForStudent.some((x) => x.type === 'today');
+          const targetTab: StudentTab = hasToday ? 'today' : 'extra';
+          pushToast({
+            category: 'assignment',
+            title: `Có ${addedForStudent.length} bài tập mới vừa được thêm`,
+            message: addedForStudent
+              .slice(0, 3)
+              .map((x) => `${x.subject}: ${x.title}`)
+              .join(' · '),
+            actionLabel: 'Xem danh sách',
+            onAction: () => {
+              setStudentRequestedTab({ tab: targetTab, nonce: Date.now() });
+            },
+          });
+        }
       },
       (error) => handleFirestoreError(error, OperationType.LIST, 'assignments'),
     );
@@ -460,7 +526,72 @@ function NhiphocApp() {
     }
   };
 
+  const handleParentCodeSignIn = async (params: {
+    linkCode?: string;
+    displayName?: string;
+    studentName?: string;
+    grade?: string;
+  }) => {
+    setAuthError(null);
+    const cleanCode = (params.linkCode || '').trim().toUpperCase().replace(/[^A-Z0-9]/g, '');
+    if (!cleanCode && !(params.studentName || '').trim()) {
+      throw new Error('Vui lòng nhập mã kết nối của con (ví dụ: NH842K19).');
+    }
+    if (cleanCode && (cleanCode.length < 6 || cleanCode.length > 12)) {
+      throw new Error('Mã kết nối phải gồm 6–12 ký tự chữ hoa và số (ví dụ: NH842K19).');
+    }
+
+    pendingAnonymousSetupRef.current = true;
+    try {
+      const cred = await signInAnonymously(auth);
+      const uid = cred.user.uid;
+
+      if (cleanCode) {
+        try {
+          await verifyStudentLinkCode(cleanCode);
+        } catch (err) {
+          pendingAnonymousSetupRef.current = false;
+          try {
+            await deleteUser(cred.user);
+          } catch {
+            await signOut(auth);
+          }
+          throw err;
+        }
+      }
+
+      const { linkedStudentId } = await registerUserAndWorkspace({
+        uid,
+        email: '',
+        displayName: (params.displayName || '').trim() || 'Phụ huynh',
+        phone: '',
+        role: 'parent',
+        studentName: (params.studentName || '').trim() || 'Học sinh NhịpHọc',
+        grade: (params.grade || '').trim() || 'Lớp 8',
+        linkCodeInput: cleanCode,
+      });
+      const { publicUser: fresh } = await fetchUserProfiles(uid);
+      pendingAnonymousSetupRef.current = false;
+      setPublicUser(fresh);
+      setSelectedStudentId(linkedStudentId);
+      setProfileLoading(false);
+      setAuthReady(true);
+    } catch (err) {
+      pendingAnonymousSetupRef.current = false;
+      const code = (err as { code?: string })?.code || '';
+      if (code === 'auth/operation-not-allowed' || code === 'auth/admin-restricted-operation') {
+        throw new Error(
+          'Cần bật "Anonymous" trong Firebase Console (Authentication → Sign-in method → Anonymous → Enable) để Phụ huynh đăng nhập trực tiếp chỉ bằng mã kết nối.',
+        );
+      }
+      throw new Error(err instanceof Error ? err.message : 'Không thể đăng nhập bằng mã kết nối.');
+    }
+  };
+
   const handleSignOut = async () => {
+    if (firebaseUser?.isAnonymous) {
+      await cleanupAnonymousParentSession(firebaseUser.uid, students);
+    }
     await signOut(auth);
   };
 
@@ -490,7 +621,7 @@ function NhiphocApp() {
       uid: firebaseUser.uid,
       email: firebaseUser.email || '',
       displayName: data.displayName,
-      phone: data.phone,
+      phone: data.phone.trim() || firebaseUser.phoneNumber || '',
       role: data.role,
       studentName: data.studentName,
       grade: data.grade,
@@ -517,7 +648,11 @@ function NhiphocApp() {
           firebaseUser={firebaseUser}
           authLoading={authLoading}
           authError={authError}
+          preferredRole={preferredRole}
+          onChangePreferredRole={setPreferredRole}
+          onClearAuthError={() => setAuthError(null)}
           onGoogleSignIn={handleGoogleSignIn}
+          onParentCodeSignIn={handleParentCodeSignIn}
           onSignOut={handleSignOut}
           onCompleteRegistration={handleCompleteRegistration}
         />

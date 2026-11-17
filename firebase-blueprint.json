@@ -246,7 +246,7 @@
         },
         "status": {
           "type": "string",
-          "enum": ["pending", "submitted", "graded"]
+          "enum": ["pending", "submitted", "needs_revision", "graded"]
         },
         "photoDataUrl": {
           "type": "string",
@@ -269,6 +269,10 @@
         "assistantFeedback": {
           "type": "string",
           "maxLength": 1000
+        },
+        "assistantFeedbackPhotoUrl": {
+          "type": "string",
+          "maxLength": 260000
         },
         "scoreLabel": {
           "type": "string",

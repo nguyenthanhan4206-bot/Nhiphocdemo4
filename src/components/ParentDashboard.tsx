@@ -1,19 +1,25 @@
-import React, { useMemo, useState } from 'react';
+import React, { useMemo, useRef, useState } from 'react';
 import {
   BarChart3,
   Calendar,
   Check,
   CheckCheck,
+  ClipboardList,
   Eye,
   HelpCircle,
+  ImagePlus,
   Lightbulb,
   Link2,
   LogOut,
   Menu,
   MessageSquare,
+  Plus,
+  RotateCcw,
   Send,
+  Sparkles,
   Star,
   Trash2,
+  Upload,
   X,
 } from 'lucide-react';
 import {
@@ -27,13 +33,17 @@ import {
   TicketCategory,
 } from '../types';
 import {
+  createAssignmentsBatch,
   createFeedbackTicket,
   createSchedule,
+  deletePendingAssignment,
   getTreeStageLabel,
   linkStudentByCode,
+  ParsedTeacherTask,
+  parseTeacherMessageToTasks,
   sendMessage,
 } from '../services/nhiphocService';
-import { formatTimeAgoVi } from '../utils/imageCompress';
+import { compressImageFileToDataUrl, formatTimeAgoVi } from '../utils/imageCompress';
 import { DeleteAccountModal } from './DeleteAccountModal';
 import {
   MascotAvatar,
@@ -56,7 +66,12 @@ interface ParentDashboardProps {
   onDeleteAccount: () => Promise<void>;
 }
 
-type ParentTab = 'contact_schedule' | 'child_progress' | 'feedback_help';
+type ParentTab = 'child_progress' | 'teacher_tasks' | 'contact_schedule' | 'feedback_help';
+
+interface DraftTodoTask extends ParsedTeacherTask {
+  localId: string;
+  selected: boolean;
+}
 
 const WEEKDAY_LABELS = ['T2', 'T3', 'T4', 'T5', 'T6', 'T7', 'CN'];
 
@@ -104,6 +119,20 @@ export const ParentDashboard: React.FC<ParentDashboardProps> = ({
   // Photo preview
   const [previewPhoto, setPreviewPhoto] = useState<{ title: string; url: string } | null>(null);
 
+  // Teacher message -> To-do List tracker state
+  const [teacherMsgText, setTeacherMsgText] = useState('');
+  const [teacherImages, setTeacherImages] = useState<string[]>([]);
+  const [autoAddParsed, setAutoAddParsed] = useState(true);
+  const [parsingTeacherMsg, setParsingTeacherMsg] = useState(false);
+  const [addingDraftTasks, setAddingDraftTasks] = useState(false);
+  const [parseError, setParseError] = useState<string | null>(null);
+  const [parsedSummary, setParsedSummary] = useState('');
+  const [draftTasks, setDraftTasks] = useState<DraftTodoTask[]>([]);
+  const [lastAddedIds, setLastAddedIds] = useState<string[]>([]);
+  const [lastAddedNotice, setLastAddedNotice] = useState<string | null>(null);
+  const [deletingAssignmentId, setDeletingAssignmentId] = useState<string | null>(null);
+  const teacherFileInputRef = useRef<HTMLInputElement | null>(null);
+
   const student = students.find((s) => s.id === selectedStudentId) || students[0] || null;
 
   const studentAssignments = useMemo(
@@ -133,7 +162,9 @@ export const ParentDashboard: React.FC<ParentDashboardProps> = ({
 
   const progressStats = useMemo(() => {
     const total = studentAssignments.length;
-    const submitted = studentAssignments.filter((a) => a.status !== 'pending').length;
+    const submitted = studentAssignments.filter(
+      (a) => a.status === 'submitted' || a.status === 'graded',
+    ).length;
     const graded = studentAssignments.filter((a) => a.status === 'graded').length;
     const completionPct = total > 0 ? Math.round((submitted / total) * 100) : 0;
     return { total, submitted, graded, completionPct };
@@ -158,6 +189,7 @@ export const ParentDashboard: React.FC<ParentDashboardProps> = ({
 
   const latestHighlightAssignment = useMemo(() => {
     return (
+      studentAssignments.find((a) => a.status === 'needs_revision') ||
       studentAssignments.find((a) => a.status === 'graded') ||
       studentAssignments.find((a) => a.status === 'submitted') ||
       studentAssignments[0] ||
@@ -166,7 +198,10 @@ export const ParentDashboard: React.FC<ParentDashboardProps> = ({
   }, [studentAssignments]);
 
   const nextPendingAssignment = useMemo(
-    () => studentAssignments.find((a) => a.status === 'pending') || null,
+    () =>
+      studentAssignments.find(
+        (a) => a.status === 'needs_revision' || a.status === 'pending',
+      ) || null,
     [studentAssignments],
   );
 
@@ -244,14 +279,148 @@ export const ParentDashboard: React.FC<ParentDashboardProps> = ({
     }
   };
 
+  const handleTeacherImageUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = Array.from(e.target.files || []);
+    e.target.value = '';
+    if (files.length === 0) return;
+    setParseError(null);
+
+    const remainingSlots = Math.max(0, 3 - teacherImages.length);
+    if (remainingSlots === 0) {
+      setParseError('Mỗi lần tải tối đa 3 ảnh chụp tin nhắn giáo viên.');
+      return;
+    }
+
+    const compressedList: string[] = [];
+    try {
+      for (const file of files.slice(0, remainingSlots)) {
+        const compressed = await compressImageFileToDataUrl(file, 1080, 0.78);
+        compressedList.push(compressed);
+      }
+      setTeacherImages((prev) => [...prev, ...compressedList].slice(0, 3));
+    } catch (err) {
+      setParseError(
+        err instanceof Error ? err.message : 'Không thể đọc ảnh tin nhắn giáo viên đã chọn.',
+      );
+    }
+  };
+
+  const handleParseTeacherMessage = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!student) return;
+    setParseError(null);
+    setLastAddedNotice(null);
+
+    if (!teacherMsgText.trim() && teacherImages.length === 0) {
+      setParseError('Vui lòng dán tin nhắn của giáo viên hoặc tải lên ảnh chụp tin nhắn.');
+      return;
+    }
+
+    setParsingTeacherMsg(true);
+    try {
+      const result = await parseTeacherMessageToTasks({
+        messageText: teacherMsgText,
+        imageDataUrls: teacherImages,
+        studentName: student.studentName,
+        studentGrade: student.grade,
+      });
+
+      setParsedSummary(result.summaryNote);
+
+      if (result.tasks.length === 0) {
+        setDraftTasks([]);
+        setLastAddedIds([]);
+        setParseError(
+          'Chưa thấy bài tập hay nhiệm vụ cụ thể nào trong tin nhắn này. Bạn có thể bổ sung thêm nội dung rồi thử lại.',
+        );
+        return;
+      }
+
+      if (autoAddParsed) {
+        const createdIds = await createAssignmentsBatch({
+          student,
+          createdBy: user.uid,
+          tasks: result.tasks,
+        });
+        setDraftTasks([]);
+        setLastAddedIds(createdIds);
+        setLastAddedNotice(
+          `Đã tự động tách và thêm ${createdIds.length} bài tập vào danh sách của ${student.studentName}.`,
+        );
+        setTeacherMsgText('');
+        setTeacherImages([]);
+      } else {
+        setDraftTasks(
+          result.tasks.map((t, idx) => ({
+            ...t,
+            localId: `${Date.now()}_${idx}`,
+            selected: true,
+          })),
+        );
+        setLastAddedIds([]);
+      }
+    } catch (err) {
+      setParseError(
+        err instanceof Error ? err.message : 'Không thể phân tích tin nhắn giáo viên.',
+      );
+    } finally {
+      setParsingTeacherMsg(false);
+    }
+  };
+
+  const handleConfirmDraftTasks = async () => {
+    if (!student) return;
+    const selected = draftTasks.filter((t) => t.selected && t.title.trim());
+    if (selected.length === 0) {
+      setParseError('Vui lòng chọn ít nhất 1 bài tập để thêm cho con.');
+      return;
+    }
+    setParseError(null);
+    setAddingDraftTasks(true);
+    try {
+      const createdIds = await createAssignmentsBatch({
+        student,
+        createdBy: user.uid,
+        tasks: selected,
+      });
+      setLastAddedIds(createdIds);
+      setDraftTasks([]);
+      setTeacherMsgText('');
+      setTeacherImages([]);
+      setLastAddedNotice(
+        `Đã thêm ${createdIds.length} bài tập từ tin nhắn giáo viên vào danh sách của ${student.studentName}.`,
+      );
+    } catch (err) {
+      setParseError(err instanceof Error ? err.message : 'Không thể thêm bài tập cho con.');
+    } finally {
+      setAddingDraftTasks(false);
+    }
+  };
+
+  const handleDeletePendingTask = async (assignmentId: string) => {
+    setDeletingAssignmentId(assignmentId);
+    try {
+      await deletePendingAssignment(assignmentId);
+      setLastAddedIds((prev) => prev.filter((id) => id !== assignmentId));
+    } finally {
+      setDeletingAssignmentId(null);
+    }
+  };
+
   const navItems: Array<{
     id: ParentTab;
     label: string;
     shortLabel: string;
     icon: React.FC<{ className?: string }>;
   }> = [
-    { id: 'contact_schedule', label: 'Liên lạc & Lên lịch', shortLabel: 'Liên lạc & Lịch', icon: MessageSquare },
     { id: 'child_progress', label: 'Kiểm tra tiến độ của con', shortLabel: 'Tiến độ của con', icon: BarChart3 },
+    {
+      id: 'teacher_tasks',
+      label: 'Tin nhắn giáo viên → Bài tập',
+      shortLabel: 'Tin nhắn GV',
+      icon: ClipboardList,
+    },
+    { id: 'contact_schedule', label: 'Liên lạc & Lên lịch', shortLabel: 'Liên lạc & Lịch', icon: MessageSquare },
     { id: 'feedback_help', label: 'Phản hồi & Trợ giúp', shortLabel: 'Phản hồi & Trợ giúp', icon: HelpCircle },
   ];
 
@@ -343,7 +512,7 @@ export const ParentDashboard: React.FC<ParentDashboardProps> = ({
           className="w-full flex items-center justify-center gap-2 px-3.5 py-2 rounded-xl border border-[#E5DBC4] text-xs font-semibold text-[#5C5347] hover:bg-[#FDF3D0] transition-colors"
         >
           <LogOut className="w-3.5 h-3.5" />
-          Đăng xuất
+          Đăng xuất / Đổi vai trò
         </button>
         <button
           type="button"
@@ -462,6 +631,416 @@ export const ParentDashboard: React.FC<ParentDashboardProps> = ({
               >
                 Kết nối ngay
               </button>
+            </div>
+          ) : activeTab === 'teacher_tasks' ? (
+            /* Section: Upload tin nhắn giáo viên -> Tự động tạo To-do bài tập cho con */
+            <div className="space-y-6">
+              <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
+                {/* Left: Upload / Paste Teacher Message */}
+                <form
+                  onSubmit={handleParseTeacherMessage}
+                  className="lg:col-span-6 rounded-2xl border border-[#E5DBC4] bg-white p-6 space-y-4"
+                >
+                  <div className="space-y-1">
+                    <p className="text-xs font-bold text-[#C45A15] inline-flex items-center gap-1.5">
+                      <Sparkles className="w-3.5 h-3.5" />
+                      Tự động theo dõi bài tập từ tin nhắn giáo viên
+                    </p>
+                    <h2 className="text-base font-bold text-[#231E18]">
+                      Dán tin nhắn hoặc tải ảnh chụp thông báo lớp
+                    </h2>
+                    <p className="text-xs text-[#6B6154] leading-relaxed">
+                      Dán nội dung tin nhắn Zalo/SMS hoặc chọn ảnh chụp màn hình từ giáo viên. Hệ
+                      thống sẽ tự động tách từng môn thành To-do list và thêm vào mục bài tập của{' '}
+                      <span className="font-semibold text-[#231E18]">{student.studentName}</span>.
+                    </p>
+                  </div>
+
+                  <div>
+                    <label
+                      htmlFor="teacher-msg-input"
+                      className="block text-xs font-semibold text-[#5C5347] mb-1.5"
+                    >
+                      Nội dung tin nhắn giáo viên
+                    </label>
+                    <textarea
+                      id="teacher-msg-input"
+                      rows={5}
+                      maxLength={6000}
+                      value={teacherMsgText}
+                      onChange={(e) => setTeacherMsgText(e.target.value)}
+                      placeholder="Ví dụ: Chào phụ huynh lớp 8A, tối nay các con hoàn thành:&#10;1. Toán: Bài tập 1, 2, 3 trang 45 SGK.&#10;2. Ngữ văn: Soạn bài Bếp lửa.&#10;3. Tiếng Anh: Học 10 từ vựng Unit 4, hạn nộp sáng mai."
+                      className="w-full rounded-xl bg-white border border-[#E5DBC4] px-3.5 py-2.5 text-sm text-[#231E18] placeholder:text-[#968A7B] focus:outline-none focus:ring-2 focus:ring-[#C45A15]/25 focus:border-[#C45A15]"
+                    />
+                  </div>
+
+                  {/* Screenshot Upload */}
+                  <div className="rounded-xl border border-[#E5DBC4] bg-[#FBF8F1] p-4 space-y-3">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <div>
+                        <p className="text-xs font-bold text-[#231E18] flex items-center gap-1.5">
+                          <ImagePlus className="w-4 h-4 text-[#C45A15]" />
+                          Ảnh chụp màn hình tin nhắn (tối đa 3 ảnh)
+                        </p>
+                        <p className="text-xs text-[#6B6154] mt-0.5">
+                          Hỗ trợ chụp ảnh Zalo, bảng dặn dò hoặc phiếu bài tập trên lớp.
+                        </p>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => teacherFileInputRef.current?.click()}
+                        disabled={teacherImages.length >= 3}
+                        className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-[#E5DBC4] bg-white text-xs font-semibold text-[#231E18] hover:bg-[#FDF3D0] disabled:opacity-45 transition-colors whitespace-nowrap"
+                      >
+                        <Upload className="w-3.5 h-3.5 text-[#C45A15]" />
+                        Tải ảnh tin nhắn
+                      </button>
+                    </div>
+
+                    <input
+                      ref={teacherFileInputRef}
+                      type="file"
+                      accept="image/*"
+                      multiple
+                      onChange={handleTeacherImageUpload}
+                      className="hidden"
+                    />
+
+                    {teacherImages.length > 0 && (
+                      <div className="grid grid-cols-3 gap-2.5">
+                        {teacherImages.map((imgUrl, idx) => (
+                          <div
+                            key={`${idx}_${imgUrl.slice(0, 24)}`}
+                            className="relative rounded-lg border border-[#E5DBC4] bg-white p-1.5"
+                          >
+                            <img
+                              src={imgUrl}
+                              alt={`Ảnh tin nhắn giáo viên ${idx + 1}`}
+                              onClick={() =>
+                                setPreviewPhoto({
+                                  title: `Ảnh tin nhắn giáo viên #${idx + 1}`,
+                                  url: imgUrl,
+                                })
+                              }
+                              className="h-24 w-full object-cover rounded cursor-zoom-in"
+                            />
+                            <button
+                              type="button"
+                              onClick={() =>
+                                setTeacherImages((prev) => prev.filter((_, i) => i !== idx))
+                              }
+                              aria-label="Xóa ảnh"
+                              className="absolute -top-2 -right-2 w-6 h-6 rounded-full bg-[#231E18] text-white flex items-center justify-center hover:bg-red-700 transition-colors"
+                            >
+                              <X className="w-3.5 h-3.5" />
+                            </button>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Auto-add option */}
+                  <label className="flex items-start gap-2.5 cursor-pointer select-none">
+                    <input
+                      type="checkbox"
+                      checked={autoAddParsed}
+                      onChange={(e) => setAutoAddParsed(e.target.checked)}
+                      className="mt-0.5 rounded border-[#C45A15] text-[#C45A15] focus:ring-[#C45A15]"
+                    />
+                    <span className="text-xs text-[#5C5347] leading-relaxed">
+                      <span className="font-bold text-[#231E18]">
+                        Tự động thêm ngay vào bài tập của con
+                      </span>{' '}
+                      (bỏ chọn nếu bạn muốn xem lại và chỉnh sửa từng đầu việc trước khi giao).
+                    </span>
+                  </label>
+
+                  {parseError && (
+                    <p className="text-xs font-medium text-red-700 bg-red-50 border border-red-200 rounded-xl px-3.5 py-2.5">
+                      {parseError}
+                    </p>
+                  )}
+
+                  <button
+                    type="submit"
+                    disabled={parsingTeacherMsg}
+                    className="w-full inline-flex items-center justify-center gap-2 py-3 px-4 rounded-xl bg-[#C45A15] text-white text-sm font-bold hover:bg-[#AA4C0F] disabled:opacity-50 transition-colors"
+                  >
+                    <Sparkles className="w-4 h-4" />
+                    {parsingTeacherMsg
+                      ? 'Đang đọc tin nhắn & tách thành To-do...'
+                      : autoAddParsed
+                        ? 'Tách To-do & tự động thêm bài tập'
+                        : 'Phân tích tin nhắn thành To-do'}
+                  </button>
+                </form>
+
+                {/* Right: Parsed To-Do Preview / Tracked Results */}
+                <div className="lg:col-span-6 space-y-5">
+                  {draftTasks.length > 0 ? (
+                    <div className="rounded-2xl border border-[#E5DBC4] bg-white p-6 space-y-4">
+                      <div className="space-y-1">
+                        <p className="text-xs font-bold text-[#C45A15]">Xem trước To-do đã tách</p>
+                        <h3 className="text-base font-bold text-[#231E18]">
+                          Kiểm tra và chọn bài tập muốn thêm cho {student.studentName}
+                        </h3>
+                        {parsedSummary && (
+                          <p className="text-xs text-[#5C5347] bg-[#FDF3D0]/80 border border-[#E5DBC4] rounded-lg px-3 py-2">
+                            {parsedSummary}
+                          </p>
+                        )}
+                      </div>
+
+                      <div className="space-y-3 max-h-[460px] overflow-y-auto pr-1">
+                        {draftTasks.map((task, idx) => (
+                          <div
+                            key={task.localId}
+                            className={`rounded-xl border p-4 space-y-2.5 transition-colors ${
+                              task.selected
+                                ? 'border-[#C45A15]/60 bg-[#FBF8F1]'
+                                : 'border-[#E5DBC4] bg-white opacity-60'
+                            }`}
+                          >
+                            <div className="flex items-center justify-between gap-2">
+                              <label className="inline-flex items-center gap-2 text-xs font-bold text-[#231E18] cursor-pointer">
+                                <input
+                                  type="checkbox"
+                                  checked={task.selected}
+                                  onChange={(e) =>
+                                    setDraftTasks((prev) =>
+                                      prev.map((item, i) =>
+                                        i === idx ? { ...item, selected: e.target.checked } : item,
+                                      ),
+                                    )
+                                  }
+                                />
+                                Đầu việc #{idx + 1}
+                              </label>
+                              <div className="inline-flex items-center gap-1 p-0.5 rounded-lg bg-white border border-[#E5DBC4]">
+                                {(
+                                  [
+                                    { id: 'today', label: 'Hôm nay' },
+                                    { id: 'extra', label: 'Bổ sung' },
+                                  ] as const
+                                ).map((opt) => (
+                                  <button
+                                    key={opt.id}
+                                    type="button"
+                                    onClick={() =>
+                                      setDraftTasks((prev) =>
+                                        prev.map((item, i) =>
+                                          i === idx ? { ...item, type: opt.id } : item,
+                                        ),
+                                      )
+                                    }
+                                    className={`px-2.5 py-1 rounded-md text-xs font-semibold ${
+                                      task.type === opt.id
+                                        ? 'bg-[#C45A15] text-white'
+                                        : 'text-[#6B6154]'
+                                    }`}
+                                  >
+                                    {opt.label}
+                                  </button>
+                                ))}
+                              </div>
+                            </div>
+
+                            <div className="grid grid-cols-2 gap-2">
+                              <input
+                                type="text"
+                                maxLength={40}
+                                value={task.subject}
+                                onChange={(e) =>
+                                  setDraftTasks((prev) =>
+                                    prev.map((item, i) =>
+                                      i === idx ? { ...item, subject: e.target.value } : item,
+                                    ),
+                                  )
+                                }
+                                placeholder="Môn học"
+                                className="rounded-lg border border-[#E5DBC4] bg-white px-2.5 py-1.5 text-xs font-semibold text-[#C45A15]"
+                              />
+                              <input
+                                type="text"
+                                maxLength={60}
+                                value={task.dueLabel}
+                                onChange={(e) =>
+                                  setDraftTasks((prev) =>
+                                    prev.map((item, i) =>
+                                      i === idx ? { ...item, dueLabel: e.target.value } : item,
+                                    ),
+                                  )
+                                }
+                                placeholder="Hạn nộp"
+                                className="rounded-lg border border-[#E5DBC4] bg-white px-2.5 py-1.5 text-xs text-[#5C5347]"
+                              />
+                            </div>
+
+                            <input
+                              type="text"
+                              maxLength={120}
+                              value={task.title}
+                              onChange={(e) =>
+                                setDraftTasks((prev) =>
+                                  prev.map((item, i) =>
+                                    i === idx ? { ...item, title: e.target.value } : item,
+                                  ),
+                                )
+                              }
+                              placeholder="Tên bài tập"
+                              className="w-full rounded-lg border border-[#E5DBC4] bg-white px-3 py-1.5 text-sm font-bold text-[#231E18]"
+                            />
+
+                            <textarea
+                              rows={2}
+                              maxLength={800}
+                              value={task.description}
+                              onChange={(e) =>
+                                setDraftTasks((prev) =>
+                                  prev.map((item, i) =>
+                                    i === idx ? { ...item, description: e.target.value } : item,
+                                  ),
+                                )
+                              }
+                              placeholder="Chi tiết bài tập..."
+                              className="w-full rounded-lg border border-[#E5DBC4] bg-white px-3 py-1.5 text-xs text-[#5C5347]"
+                            />
+                          </div>
+                        ))}
+                      </div>
+
+                      <div className="flex items-center justify-between gap-3 pt-2 border-t border-[#EFE6D2]">
+                        <button
+                          type="button"
+                          onClick={() => setDraftTasks([])}
+                          className="px-4 py-2 rounded-lg text-xs font-semibold text-[#6B6154] hover:bg-[#FDF3D0]"
+                        >
+                          Hủy bản nháp
+                        </button>
+                        <button
+                          type="button"
+                          disabled={addingDraftTasks}
+                          onClick={handleConfirmDraftTasks}
+                          className="inline-flex items-center gap-1.5 px-5 py-2.5 rounded-xl bg-[#3F6A52] text-white text-xs font-bold hover:bg-[#345944] disabled:opacity-50 transition-colors"
+                        >
+                          <Plus className="w-4 h-4" />
+                          {addingDraftTasks
+                            ? 'Đang thêm...'
+                            : `Thêm ${draftTasks.filter((t) => t.selected).length} bài tập cho con`}
+                        </button>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="rounded-2xl border border-[#E5DBC4] bg-white p-6 space-y-4">
+                      <div className="flex items-center justify-between gap-2">
+                        <div>
+                          <h3 className="text-base font-bold text-[#231E18]">
+                            To-do bài tập đang theo dõi của {student.studentName}
+                          </h3>
+                          <p className="text-xs text-[#6B6154]">
+                            Mọi bài tập được tách từ tin nhắn giáo viên đều đồng bộ ngay sang máy của con và trợ lý.
+                          </p>
+                        </div>
+                        <span className="text-xs font-bold text-[#C45A15] tabular-nums shrink-0">
+                          {progressStats.submitted}/{progressStats.total} xong
+                        </span>
+                      </div>
+
+                      {lastAddedNotice && (
+                        <div className="rounded-xl border border-[#3F6A52]/30 bg-[#FDF3D0] p-3.5 space-y-1">
+                          <p className="text-xs font-bold text-[#3F6A52] flex items-center gap-1.5">
+                            <CheckCheck className="w-4 h-4" />
+                            {lastAddedNotice}
+                          </p>
+                          {parsedSummary && (
+                            <p className="text-xs text-[#5C5347]">{parsedSummary}</p>
+                          )}
+                        </div>
+                      )}
+
+                      {studentAssignments.length === 0 ? (
+                        <div className="rounded-xl border border-[#E5DBC4] bg-[#FBF8F1] p-6 text-center space-y-2">
+                          <ClipboardList className="w-7 h-7 text-[#C45A15]/60 mx-auto" />
+                          <p className="text-sm font-bold text-[#231E18]">Chưa có bài tập nào</p>
+                          <p className="text-xs text-[#6B6154]">
+                            Dán tin nhắn hoặc tải ảnh thông báo của giáo viên ở khung bên cạnh để
+                            tự động tạo danh sách To-do đầu tiên.
+                          </p>
+                        </div>
+                      ) : (
+                        <div className="divide-y divide-[#EFE6D2] max-h-[460px] overflow-y-auto">
+                          {studentAssignments.map((a) => {
+                            const isJustAdded = lastAddedIds.includes(a.id);
+                            const canDelete = a.status === 'pending' && a.createdBy === user.uid;
+                            return (
+                              <div
+                                key={a.id}
+                                className={`py-3 flex items-start justify-between gap-3 ${
+                                  isJustAdded ? 'bg-[#FDF3D0]/45 px-2.5 rounded-lg' : ''
+                                }`}
+                              >
+                                <div className="min-w-0 space-y-0.5">
+                                  <div className="flex flex-wrap items-center gap-1.5 text-xs text-[#6B6154]">
+                                    <span className="font-bold text-[#C45A15]">{a.subject}</span>
+                                    <span aria-hidden="true">·</span>
+                                    <span>{a.type === 'today' ? 'Bài hôm nay' : 'Bài bổ sung'}</span>
+                                    <span aria-hidden="true">·</span>
+                                    <span>{a.dueLabel}</span>
+                                    {isJustAdded && (
+                                      <span className="font-bold text-[#3F6A52]">· Mới thêm</span>
+                                    )}
+                                  </div>
+                                  <p className="text-sm font-bold text-[#231E18]">{a.title}</p>
+                                  {a.description && (
+                                    <p className="text-xs text-[#5C5347] line-clamp-2">
+                                      {a.description}
+                                    </p>
+                                  )}
+                                </div>
+
+                                <div className="flex items-center gap-2 shrink-0">
+                                  <span
+                                    className={`text-xs font-semibold whitespace-nowrap ${
+                                      a.status === 'graded'
+                                        ? 'text-[#3F6A52]'
+                                        : a.status === 'needs_revision'
+                                          ? 'text-amber-800'
+                                          : a.status === 'submitted'
+                                            ? 'text-[#C45A15]'
+                                            : 'text-[#8C8172]'
+                                    }`}
+                                  >
+                                    {a.status === 'graded'
+                                      ? 'Đã chấm'
+                                      : a.status === 'needs_revision'
+                                        ? 'Cần nộp lại'
+                                        : a.status === 'submitted'
+                                          ? 'Đã nộp'
+                                          : 'Chưa nộp'}
+                                  </span>
+                                  {canDelete && (
+                                    <button
+                                      type="button"
+                                      disabled={deletingAssignmentId === a.id}
+                                      onClick={() => handleDeletePendingTask(a.id)}
+                                      title="Xóa bài tập này"
+                                      aria-label={`Xóa bài tập ${a.title}`}
+                                      className="p-1.5 rounded-lg text-[#8C8172] hover:text-red-700 hover:bg-red-50 transition-colors"
+                                    >
+                                      <Trash2 className="w-3.5 h-3.5" />
+                                    </button>
+                                  )}
+                                </div>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+              </div>
             </div>
           ) : activeTab === 'contact_schedule' ? (
             <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
@@ -757,11 +1336,13 @@ export const ParentDashboard: React.FC<ParentDashboardProps> = ({
                         <p className="text-xs font-bold text-[#C45A15]">Bản tin cuối ngày</p>
                         <p className="text-sm text-[#231E18] leading-relaxed">
                           {latestHighlightAssignment
-                            ? latestHighlightAssignment.status === 'graded'
-                              ? `${student.studentName} đã hoàn thành "${latestHighlightAssignment.title}" (${latestHighlightAssignment.scoreLabel || 'Đã chấm'}) — ${latestHighlightAssignment.assistantFeedback}`
-                              : latestHighlightAssignment.status === 'submitted'
-                                ? `${student.studentName} đã nộp ảnh bài "${latestHighlightAssignment.title}" và đang chờ trợ lý chấm chi tiết.`
-                                : `${student.studentName} hiện có ${progressStats.total - progressStats.submitted} bài tập đang chờ hoàn thành.`
+                            ? latestHighlightAssignment.status === 'needs_revision'
+                              ? `Trợ lý đã nhận xét bài "${latestHighlightAssignment.title}" cần con làm lại & nộp lại (${latestHighlightAssignment.assistantFeedback}).`
+                              : latestHighlightAssignment.status === 'graded'
+                                ? `${student.studentName} đã hoàn thành "${latestHighlightAssignment.title}" (${latestHighlightAssignment.scoreLabel || 'Đã chấm'}) — ${latestHighlightAssignment.assistantFeedback}`
+                                : latestHighlightAssignment.status === 'submitted'
+                                  ? `${student.studentName} đã nộp ảnh bài "${latestHighlightAssignment.title}" và đang chờ trợ lý chấm chi tiết.`
+                                  : `${student.studentName} hiện có ${progressStats.total - progressStats.submitted} bài tập đang chờ hoàn thành.`
                             : `Chưa có bài tập nào được giao cho ${student.studentName}.`}
                         </p>
                       </div>
@@ -794,17 +1375,31 @@ export const ParentDashboard: React.FC<ParentDashboardProps> = ({
 
               {/* Clean Assignment Progress Table/List */}
               <div className="rounded-2xl border border-[#E5DBC4] bg-white overflow-hidden">
-                <div className="px-5 py-4 border-b border-[#EFE6D2] flex items-center justify-between">
-                  <h2 className="text-sm font-bold text-[#231E18]">
-                    Chi tiết bài tập của {student.studentName}
-                  </h2>
-                  <span className="text-xs text-[#6B6154] tabular-nums">
-                    {studentAssignments.length} bài tập
-                  </span>
+                <div className="px-5 py-4 border-b border-[#EFE6D2] flex flex-wrap items-center justify-between gap-3">
+                  <div className="flex items-center gap-3">
+                    <h2 className="text-sm font-bold text-[#231E18]">
+                      Chi tiết bài tập của {student.studentName}
+                    </h2>
+                    <span className="text-xs text-[#6B6154] tabular-nums">
+                      ({studentAssignments.length} bài tập)
+                    </span>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setActiveTab('teacher_tasks')}
+                    className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-[#FDF3D0] border border-[#E5DBC4] text-xs font-bold text-[#C45A15] hover:bg-[#F7E7B5] transition-colors whitespace-nowrap"
+                  >
+                    <Sparkles className="w-3.5 h-3.5" />
+                    Thêm từ tin nhắn giáo viên
+                  </button>
                 </div>
 
                 {studentAssignments.length === 0 ? (
-                  <p className="p-6 text-sm text-[#6B6154]">Chưa có bài tập nào được giao.</p>
+                  <p className="p-6 text-sm text-[#6B6154]">
+                    {student.studentUid || student.assistantUid
+                      ? 'Chưa có bài tập hiển thị — nếu con hoặc Trợ lý đã tạo bài trước khi bạn nhập mã kết nối, bài tập sẽ tự đồng bộ ngay khi thiết bị của con/Trợ lý mở NhịpHọc.'
+                      : 'Chưa có bài tập nào được giao.'}
+                  </p>
                 ) : (
                   <div className="divide-y divide-[#EFE6D2]">
                     {studentAssignments.map((a) => (
@@ -833,12 +1428,15 @@ export const ParentDashboard: React.FC<ParentDashboardProps> = ({
                           )}
                         </div>
 
-                        <div className="flex items-center gap-3 shrink-0">
+                        <div className="flex flex-wrap items-center gap-2.5 shrink-0">
                           {a.photoDataUrl && (
                             <button
                               type="button"
                               onClick={() =>
-                                setPreviewPhoto({ title: a.title, url: a.photoDataUrl })
+                                setPreviewPhoto({
+                                  title: `Ảnh con nộp · ${a.title}`,
+                                  url: a.photoDataUrl,
+                                })
                               }
                               className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-[#E5DBC4] bg-[#FBF8F1] text-xs font-semibold text-[#231E18] hover:bg-[#FDF3D0] whitespace-nowrap"
                             >
@@ -846,19 +1444,41 @@ export const ParentDashboard: React.FC<ParentDashboardProps> = ({
                               Xem ảnh bài
                             </button>
                           )}
+                          {a.assistantFeedbackPhotoUrl && (
+                            <button
+                              type="button"
+                              onClick={() =>
+                                setPreviewPhoto({
+                                  title: `Ảnh trợ lý chấm · ${a.title}`,
+                                  url: a.assistantFeedbackPhotoUrl || '',
+                                })
+                              }
+                              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-[#C45A15]/40 bg-[#FDF3D0] text-xs font-semibold text-[#C45A15] hover:bg-[#F7E7B5] whitespace-nowrap"
+                            >
+                              <Eye className="w-3.5 h-3.5" />
+                              Ảnh trợ lý chấm
+                            </button>
+                          )}
                           <span
                             className={`inline-flex items-center gap-1.5 text-xs font-semibold whitespace-nowrap ${
                               a.status === 'graded'
                                 ? 'text-[#3F6A52]'
-                                : a.status === 'submitted'
-                                  ? 'text-[#C45A15]'
-                                  : 'text-[#8C8172]'
+                                : a.status === 'needs_revision'
+                                  ? 'text-amber-800'
+                                  : a.status === 'submitted'
+                                    ? 'text-[#C45A15]'
+                                    : 'text-[#8C8172]'
                             }`}
                           >
                             {a.status === 'graded' ? (
                               <>
                                 <CheckCheck className="w-4 h-4" />
                                 Đã chấm xong
+                              </>
+                            ) : a.status === 'needs_revision' ? (
+                              <>
+                                <RotateCcw className="w-4 h-4" />
+                                Cần nộp lại
                               </>
                             ) : a.status === 'submitted' ? (
                               <>

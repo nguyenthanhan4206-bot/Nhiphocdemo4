@@ -1,18 +1,23 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Calendar,
+  Camera,
   Check,
   CheckCheck,
   ClipboardCheck,
   Copy,
+  Eye,
+  ImagePlus,
   Link2,
   LogOut,
   Menu,
   MessageSquareReply,
   Plus,
+  RotateCcw,
   Search,
   Send,
   Trash2,
+  Upload,
   UserPlus,
   Users,
   X,
@@ -37,7 +42,8 @@ import {
   toggleAssistantOnlinePresence,
   updateScheduleStatus,
 } from '../services/nhiphocService';
-import { formatTimeAgoVi } from '../utils/imageCompress';
+import { compressImageFileToDataUrl, formatTimeAgoVi } from '../utils/imageCompress';
+import { CameraCaptureModal } from './CameraCaptureModal';
 import { DeleteAccountModal } from './DeleteAccountModal';
 import {
   MascotAvatar,
@@ -58,7 +64,7 @@ interface AssistantDashboardProps {
 }
 
 type AssistantTab = 'students' | 'review' | 'parent_requests';
-type ReviewFilter = 'submitted' | 'graded' | 'pending' | 'all';
+type ReviewFilter = 'submitted' | 'needs_revision' | 'graded' | 'pending' | 'all';
 
 export const AssistantDashboard: React.FC<AssistantDashboardProps> = ({
   user,
@@ -103,7 +109,14 @@ export const AssistantDashboard: React.FC<AssistantDashboardProps> = ({
   const [selectedAssignmentId, setSelectedAssignmentId] = useState<string>('');
   const [scoreInput, setScoreInput] = useState('9/10 · Hoàn thành tốt');
   const [feedbackInput, setFeedbackInput] = useState('');
+  const [feedbackPhotoUrl, setFeedbackPhotoUrl] = useState('');
+  const [feedbackPhotoError, setFeedbackPhotoError] = useState<string | null>(null);
+  const [gradingError, setGradingError] = useState<string | null>(null);
+  const [reopeningGrade, setReopeningGrade] = useState(false);
+  const [showAssistantCamera, setShowAssistantCamera] = useState(false);
+  const [previewPhoto, setPreviewPhoto] = useState<{ title: string; url: string } | null>(null);
   const [grading, setGrading] = useState(false);
+  const feedbackFileInputRef = useRef<HTMLInputElement | null>(null);
 
   // Parent Requests Tab state
   const [msgText, setMsgText] = useState('');
@@ -139,8 +152,28 @@ export const AssistantDashboard: React.FC<AssistantDashboardProps> = ({
   const selectedAssignment =
     reviewAssignments.find((a) => a.id === selectedAssignmentId) || reviewAssignments[0] || null;
 
+  useEffect(() => {
+    if (!selectedAssignment) return;
+    setScoreInput(
+      selectedAssignment.scoreLabel ||
+        (selectedAssignment.status === 'needs_revision'
+          ? 'Chưa đạt · Cần nộp lại'
+          : '9/10 · Hoàn thành tốt'),
+    );
+    setFeedbackInput(selectedAssignment.assistantFeedback || '');
+    setFeedbackPhotoUrl(selectedAssignment.assistantFeedbackPhotoUrl || '');
+    setFeedbackPhotoError(null);
+    setGradingError(null);
+    setReopeningGrade(false);
+  }, [selectedAssignment?.id]);
+
   const pendingReviewCount = useMemo(
     () => assignments.filter((a) => a.status === 'submitted').length,
+    [assignments],
+  );
+
+  const needsRevisionCount = useMemo(
+    () => assignments.filter((a) => a.status === 'needs_revision').length,
     [assignments],
   );
 
@@ -227,21 +260,59 @@ export const AssistantDashboard: React.FC<AssistantDashboardProps> = ({
     }
   };
 
-  const handleGradeSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!selectedAssignment || !feedbackInput.trim()) return;
+  const handleAssistantPhotoUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    e.target.value = '';
+    if (!file) return;
+    setFeedbackPhotoError(null);
+    setGradingError(null);
+    try {
+      const compressed = await compressImageFileToDataUrl(file, 860, 0.68);
+      setFeedbackPhotoUrl(compressed);
+    } catch (err) {
+      setFeedbackPhotoError(
+        err instanceof Error ? err.message : 'Không thể xử lý ảnh chấm bài đã chọn.',
+      );
+    }
+  };
+
+  const handleGradeAction = async (targetStatus: 'graded' | 'needs_revision') => {
+    if (!selectedAssignment) return;
+    setGradingError(null);
+
+    if (!feedbackInput.trim() && !feedbackPhotoUrl) {
+      setGradingError(
+        targetStatus === 'needs_revision'
+          ? 'Vui lòng nhập lý do cần sửa hoặc đính kèm ảnh chấm để học sinh biết cách làm lại.'
+          : 'Vui lòng nhập nhận xét hoặc tải lên ảnh bài đã chấm.',
+      );
+      return;
+    }
+
     setGrading(true);
     try {
       await gradeAssignment({
         assignmentId: selectedAssignment.id,
         gradedBy: user.uid,
-        scoreLabel: scoreInput,
+        status: targetStatus,
+        scoreLabel:
+          targetStatus === 'needs_revision' && scoreInput.trim() === '9/10 · Hoàn thành tốt'
+            ? 'Chưa đạt · Cần nộp lại'
+            : scoreInput,
         assistantFeedback: feedbackInput,
+        assistantFeedbackPhotoUrl: feedbackPhotoUrl,
       });
-      setFeedbackInput('');
+      setReopeningGrade(false);
+    } catch (err) {
+      setGradingError(err instanceof Error ? err.message : 'Không thể lưu kết quả chấm bài.');
     } finally {
       setGrading(false);
     }
+  };
+
+  const handleGradeSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    await handleGradeAction('graded');
   };
 
   const handleSendMessage = async (e: React.FormEvent) => {
@@ -392,7 +463,7 @@ export const AssistantDashboard: React.FC<AssistantDashboardProps> = ({
           className="w-full flex items-center justify-center gap-2 px-3.5 py-2 rounded-xl border border-[#E5DBC4] text-xs font-semibold text-[#5C5347] hover:bg-[#FDF3D0] transition-colors"
         >
           <LogOut className="w-3.5 h-3.5" />
-          Đăng xuất
+          Đăng xuất / Đổi vai trò
         </button>
         <button
           type="button"
@@ -632,10 +703,14 @@ export const AssistantDashboard: React.FC<AssistantDashboardProps> = ({
             /* Section 2: Kiểm tra tiến độ & Chấm bài */
             <div className="space-y-5">
               <div className="flex flex-wrap items-center justify-between gap-3">
-                <div className="inline-flex items-center gap-1 p-1 rounded-xl bg-[#F3ECDC] border border-[#E5DBC4]">
+                <div className="inline-flex flex-wrap items-center gap-1 p-1 rounded-xl bg-[#F3ECDC] border border-[#E5DBC4]">
                   {(
                     [
-                      { id: 'submitted', label: 'Chờ chấm' },
+                      { id: 'submitted', label: `Chờ chấm${pendingReviewCount > 0 ? ` (${pendingReviewCount})` : ''}` },
+                      {
+                        id: 'needs_revision',
+                        label: `Cần nộp lại${needsRevisionCount > 0 ? ` (${needsRevisionCount})` : ''}`,
+                      },
                       { id: 'graded', label: 'Đã chấm xong' },
                       { id: 'pending', label: 'Chưa nộp' },
                       { id: 'all', label: 'Tất cả' },
@@ -706,6 +781,11 @@ export const AssistantDashboard: React.FC<AssistantDashboardProps> = ({
                                     <CheckCheck className="w-3.5 h-3.5 text-[#3F6A52]" />
                                     Đã chấm
                                   </>
+                                ) : a.status === 'needs_revision' ? (
+                                  <>
+                                    <RotateCcw className="w-3.5 h-3.5 text-amber-700" />
+                                    <span className="text-amber-800 font-semibold">Cần nộp lại</span>
+                                  </>
                                 ) : a.status === 'submitted' ? (
                                   <>
                                     <Check className="w-3.5 h-3.5 text-[#C45A15]" />
@@ -745,12 +825,22 @@ export const AssistantDashboard: React.FC<AssistantDashboardProps> = ({
                             {students.find((s) => s.id === selectedAssignment.studentId)?.studentName}{' '}
                             · {selectedAssignment.subject} · {selectedAssignment.dueLabel}
                           </span>
-                          <span className="font-bold text-[#C45A15]">
+                          <span
+                            className={`font-bold ${
+                              selectedAssignment.status === 'graded'
+                                ? 'text-[#3F6A52]'
+                                : selectedAssignment.status === 'needs_revision'
+                                  ? 'text-amber-800'
+                                  : 'text-[#C45A15]'
+                            }`}
+                          >
                             {selectedAssignment.status === 'graded'
                               ? 'Đã chấm xong'
-                              : selectedAssignment.status === 'submitted'
-                                ? 'Đã nộp · Chờ chấm'
-                                : 'Chưa nộp'}
+                              : selectedAssignment.status === 'needs_revision'
+                                ? 'Đang chờ học sinh nộp lại'
+                                : selectedAssignment.status === 'submitted'
+                                  ? 'Đã nộp · Chờ chấm'
+                                  : 'Chưa nộp'}
                           </span>
                         </div>
                         <h2 className="text-lg font-extrabold text-[#231E18]">
@@ -766,14 +856,35 @@ export const AssistantDashboard: React.FC<AssistantDashboardProps> = ({
                       {/* Photo submission */}
                       {selectedAssignment.photoDataUrl ? (
                         <div className="space-y-2">
-                          <p className="text-xs font-bold text-[#231E18]">
-                            Ảnh bài làm học sinh đã chụp
-                          </p>
+                          <div className="flex items-center justify-between gap-2">
+                            <p className="text-xs font-bold text-[#231E18]">
+                              Ảnh bài làm học sinh đã chụp
+                            </p>
+                            <button
+                              type="button"
+                              onClick={() =>
+                                setPreviewPhoto({
+                                  title: `Bài học sinh nộp · ${selectedAssignment.title}`,
+                                  url: selectedAssignment.photoDataUrl,
+                                })
+                              }
+                              className="inline-flex items-center gap-1 text-xs font-semibold text-[#C45A15] hover:underline"
+                            >
+                              <Eye className="w-3.5 h-3.5" />
+                              Phóng to ảnh
+                            </button>
+                          </div>
                           <div className="rounded-xl border border-[#E5DBC4] bg-[#FBF8F1] p-3">
                             <img
                               src={selectedAssignment.photoDataUrl}
                               alt={selectedAssignment.title}
-                              className="max-h-80 mx-auto rounded-lg object-contain"
+                              onClick={() =>
+                                setPreviewPhoto({
+                                  title: `Bài học sinh nộp · ${selectedAssignment.title}`,
+                                  url: selectedAssignment.photoDataUrl,
+                                })
+                              }
+                              className="max-h-80 mx-auto rounded-lg object-contain cursor-zoom-in"
                             />
                           </div>
                           {selectedAssignment.studentNote && (
@@ -788,59 +899,247 @@ export const AssistantDashboard: React.FC<AssistantDashboardProps> = ({
                         </div>
                       )}
 
-                      {/* Grading form or Graded summary */}
-                      {selectedAssignment.status === 'graded' ? (
-                        <div className="rounded-xl border border-[#E5DBC4] bg-[#FDF3D0]/80 p-4 space-y-1.5">
-                          <p className="text-xs font-bold text-[#3F6A52] tabular-nums">
-                            Đã chấm xong · {selectedAssignment.scoreLabel}
-                          </p>
-                          <p className="text-sm text-[#231E18]">
-                            {selectedAssignment.assistantFeedback}
-                          </p>
-                        </div>
-                      ) : selectedAssignment.status === 'submitted' ? (
+                      {/* Summary Card for Graded or Needs Revision */}
+                      {(selectedAssignment.status === 'graded' ||
+                        selectedAssignment.status === 'needs_revision') &&
+                        !reopeningGrade && (
+                          <div
+                            className={`rounded-xl border p-4 space-y-3 ${
+                              selectedAssignment.status === 'needs_revision'
+                                ? 'border-amber-300 bg-amber-50/90'
+                                : 'border-[#E5DBC4] bg-[#FDF3D0]/80'
+                            }`}
+                          >
+                            <div className="flex flex-wrap items-center justify-between gap-2">
+                              <p
+                                className={`text-xs font-bold tabular-nums ${
+                                  selectedAssignment.status === 'needs_revision'
+                                    ? 'text-amber-900'
+                                    : 'text-[#3F6A52]'
+                                }`}
+                              >
+                                {selectedAssignment.status === 'needs_revision'
+                                  ? `Đã yêu cầu nộp lại · ${selectedAssignment.scoreLabel}`
+                                  : `Đã chấm xong · ${selectedAssignment.scoreLabel}`}
+                              </p>
+                              <button
+                                type="button"
+                                onClick={() => setReopeningGrade(true)}
+                                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-[#E5DBC4] bg-white text-xs font-semibold text-[#231E18] hover:bg-[#FDF3D0] transition-colors"
+                              >
+                                <RotateCcw className="w-3.5 h-3.5" />
+                                Chấm lại / Cập nhật ảnh chấm
+                              </button>
+                            </div>
+                            {selectedAssignment.assistantFeedback && (
+                              <p className="text-sm text-[#231E18] whitespace-pre-wrap">
+                                {selectedAssignment.assistantFeedback}
+                              </p>
+                            )}
+                            {selectedAssignment.assistantFeedbackPhotoUrl && (
+                              <div className="space-y-1.5 pt-1">
+                                <div className="flex items-center justify-between">
+                                  <span className="text-xs font-bold text-[#231E18]">
+                                    Ảnh bài đã chấm của Trợ lý
+                                  </span>
+                                  <button
+                                    type="button"
+                                    onClick={() =>
+                                      setPreviewPhoto({
+                                        title: `Ảnh trợ lý chấm · ${selectedAssignment.title}`,
+                                        url: selectedAssignment.assistantFeedbackPhotoUrl || '',
+                                      })
+                                    }
+                                    className="inline-flex items-center gap-1 text-xs font-semibold text-[#C45A15] hover:underline"
+                                  >
+                                    <Eye className="w-3.5 h-3.5" />
+                                    Xem ảnh lớn
+                                  </button>
+                                </div>
+                                <img
+                                  src={selectedAssignment.assistantFeedbackPhotoUrl}
+                                  alt="Ảnh trợ lý chấm bài"
+                                  onClick={() =>
+                                    setPreviewPhoto({
+                                      title: `Ảnh trợ lý chấm · ${selectedAssignment.title}`,
+                                      url: selectedAssignment.assistantFeedbackPhotoUrl || '',
+                                    })
+                                  }
+                                  className="max-h-60 rounded-lg border border-[#E5DBC4] bg-white object-contain cursor-zoom-in"
+                                />
+                              </div>
+                            )}
+                          </div>
+                        )}
+
+                      {/* Grading Form (Submitted or Re-opening Graded/Revision) */}
+                      {(selectedAssignment.status === 'submitted' || reopeningGrade) && (
                         <form
                           onSubmit={handleGradeSubmit}
-                          className="space-y-4 pt-2 border-t border-[#EFE6D2]"
+                          className="space-y-4 pt-3 border-t border-[#EFE6D2]"
                         >
+                          <div className="flex items-center justify-between gap-2">
+                            <p className="text-xs font-bold text-[#231E18]">
+                              {reopeningGrade
+                                ? 'Cập nhật chấm bài / Gửi lại ảnh chấm'
+                                : 'Chấm bài & phản hồi học sinh'}
+                            </p>
+                            {reopeningGrade && (
+                              <button
+                                type="button"
+                                onClick={() => setReopeningGrade(false)}
+                                className="text-xs font-semibold text-[#6B6154] hover:underline"
+                              >
+                                Đóng chỉnh sửa
+                              </button>
+                            )}
+                          </div>
+
                           <div>
                             <label className="block text-xs font-semibold text-[#231E18] mb-1.5">
                               Điểm số / Đánh giá nhanh
                             </label>
                             <input
                               type="text"
-                              required
                               maxLength={40}
                               value={scoreInput}
                               onChange={(e) => setScoreInput(e.target.value)}
-                              placeholder="Ví dụ: 9.5/10 · Rất tốt"
+                              placeholder="Ví dụ: 9.5/10 · Rất tốt hoặc Chưa đạt · Cần làm lại câu 3"
                               className="w-full rounded-xl border border-[#E5DBC4] px-3.5 py-2.5 text-sm text-[#231E18] focus:outline-none focus:ring-2 focus:ring-[#C45A15]/25"
                             />
                           </div>
+
                           <div>
                             <label className="block text-xs font-semibold text-[#231E18] mb-1.5">
                               Nhận xét chi tiết gửi học sinh & phụ huynh
                             </label>
                             <textarea
                               rows={3}
-                              required
                               maxLength={1000}
                               value={feedbackInput}
                               onChange={(e) => setFeedbackInput(e.target.value)}
-                              placeholder="Khen ngợi phần làm tốt và chỉ rõ bước cần sửa nếu có..."
+                              placeholder="Nhập nhận xét hoặc để trống nếu đã đính kèm ảnh bài đã chấm chi tiết..."
                               className="w-full rounded-xl border border-[#E5DBC4] px-3.5 py-2.5 text-sm text-[#231E18] focus:outline-none focus:ring-2 focus:ring-[#C45A15]/25"
                             />
                           </div>
-                          <button
-                            type="submit"
-                            disabled={grading}
-                            className="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl bg-[#C45A15] text-white text-sm font-bold hover:bg-[#AA4C0F] disabled:opacity-50"
-                          >
-                            <CheckCheck className="w-4 h-4" />
-                            {grading ? 'Đang lưu điểm...' : 'Xác nhận đã chấm xong'}
-                          </button>
+
+                          {/* Assistant Feedback Photo Upload / Capture */}
+                          <div className="space-y-2.5 rounded-xl border border-[#E5DBC4] bg-[#FBF8F1] p-4">
+                            <div className="flex flex-wrap items-center justify-between gap-2">
+                              <div>
+                                <p className="text-xs font-bold text-[#231E18] flex items-center gap-1.5">
+                                  <ImagePlus className="w-4 h-4 text-[#C45A15]" />
+                                  Tải ảnh bài đã chấm / sửa lỗi (tùy chọn)
+                                </p>
+                                <p className="text-xs text-[#6B6154] mt-0.5">
+                                  Chụp hoặc chọn ảnh bài trợ lý đã khoanh sửa trực tiếp trên giấy/máy.
+                                </p>
+                              </div>
+                              <div className="flex flex-wrap items-center gap-2">
+                                <button
+                                  type="button"
+                                  onClick={() => feedbackFileInputRef.current?.click()}
+                                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-[#E5DBC4] bg-white text-xs font-semibold text-[#231E18] hover:bg-[#FDF3D0] transition-colors whitespace-nowrap"
+                                >
+                                  <Upload className="w-3.5 h-3.5 text-[#C45A15]" />
+                                  Chọn ảnh từ máy
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => setShowAssistantCamera(true)}
+                                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-[#E5DBC4] bg-white text-xs font-semibold text-[#231E18] hover:bg-[#FDF3D0] transition-colors whitespace-nowrap"
+                                >
+                                  <Camera className="w-3.5 h-3.5 text-[#C45A15]" />
+                                  Chụp bằng camera
+                                </button>
+                              </div>
+                            </div>
+
+                            <input
+                              ref={feedbackFileInputRef}
+                              type="file"
+                              accept="image/*"
+                              onChange={handleAssistantPhotoUpload}
+                              className="hidden"
+                            />
+
+                            {feedbackPhotoError && (
+                              <p className="text-xs text-red-700 bg-red-50 border border-red-200 rounded-lg px-3 py-2">
+                                {feedbackPhotoError}
+                              </p>
+                            )}
+
+                            {feedbackPhotoUrl && (
+                              <div className="rounded-xl border border-[#E5DBC4] bg-white p-3 space-y-2">
+                                <img
+                                  src={feedbackPhotoUrl}
+                                  alt="Xem trước ảnh bài đã chấm"
+                                  onClick={() =>
+                                    setPreviewPhoto({
+                                      title: `Ảnh bài đã chấm · ${selectedAssignment.title}`,
+                                      url: feedbackPhotoUrl,
+                                    })
+                                  }
+                                  className="max-h-56 mx-auto rounded-lg object-contain cursor-zoom-in"
+                                />
+                                <div className="flex items-center justify-between text-xs pt-1 border-t border-[#EFE6D2]">
+                                  <span className="text-[#3F6A52] font-semibold">
+                                    Đã đính kèm ảnh chấm bài
+                                  </span>
+                                  <div className="flex items-center gap-2">
+                                    <button
+                                      type="button"
+                                      onClick={() =>
+                                        setPreviewPhoto({
+                                          title: `Ảnh bài đã chấm · ${selectedAssignment.title}`,
+                                          url: feedbackPhotoUrl,
+                                        })
+                                      }
+                                      className="text-[#C45A15] font-semibold hover:underline"
+                                    >
+                                      Phóng to
+                                    </button>
+                                    <button
+                                      type="button"
+                                      onClick={() => setFeedbackPhotoUrl('')}
+                                      className="text-red-700 font-semibold hover:underline"
+                                    >
+                                      Xóa ảnh
+                                    </button>
+                                  </div>
+                                </div>
+                              </div>
+                            )}
+                          </div>
+
+                          {gradingError && (
+                            <p className="text-xs font-medium text-red-700 bg-red-50 border border-red-200 rounded-lg px-3.5 py-2.5">
+                              {gradingError}
+                            </p>
+                          )}
+
+                          <div className="flex flex-wrap items-center gap-3">
+                            <button
+                              type="submit"
+                              disabled={grading}
+                              className="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl bg-[#C45A15] text-white text-sm font-bold hover:bg-[#AA4C0F] disabled:opacity-50"
+                            >
+                              <CheckCheck className="w-4 h-4" />
+                              {grading ? 'Đang lưu...' : 'Xác nhận đã chấm xong'}
+                            </button>
+
+                            <button
+                              type="button"
+                              disabled={grading}
+                              onClick={() => handleGradeAction('needs_revision')}
+                              className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl border border-amber-600 bg-amber-50 text-amber-900 text-sm font-bold hover:bg-amber-100 disabled:opacity-50 transition-colors"
+                            >
+                              <RotateCcw className="w-4 h-4" />
+                              Yêu cầu nộp lại (Chưa đạt)
+                            </button>
+                          </div>
                         </form>
-                      ) : null}
+                      )}
                     </>
                   )}
                 </div>
@@ -1354,6 +1653,52 @@ export const AssistantDashboard: React.FC<AssistantDashboardProps> = ({
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {showAssistantCamera && selectedAssignment && (
+        <CameraCaptureModal
+          assignmentTitle={selectedAssignment.title}
+          modalSubtitle="Chụp ảnh bài đã chấm của Trợ lý"
+          confirmLabel="Đính kèm ảnh chấm"
+          submittingLabel="Đang đính kèm..."
+          hideNote
+          onClose={() => setShowAssistantCamera(false)}
+          onSubmit={async (photoDataUrl) => {
+            setFeedbackPhotoUrl(photoDataUrl);
+            setFeedbackPhotoError(null);
+            setGradingError(null);
+          }}
+        />
+      )}
+
+      {previewPhoto && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-[#231E18]/60 p-4"
+          onClick={() => setPreviewPhoto(null)}
+        >
+          <div
+            className="max-w-2xl w-full bg-white rounded-2xl border border-[#E5DBC4] overflow-hidden"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="px-5 py-3.5 border-b border-[#EFE6D2] flex items-center justify-between">
+              <p className="text-sm font-bold text-[#231E18] truncate">{previewPhoto.title}</p>
+              <button
+                type="button"
+                onClick={() => setPreviewPhoto(null)}
+                className="p-1.5 rounded-lg text-[#6B6154] hover:bg-[#FDF3D0]"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+            <div className="p-4 bg-[#FBF8F1]">
+              <img
+                src={previewPhoto.url}
+                alt={previewPhoto.title}
+                className="max-h-[70vh] mx-auto rounded-lg object-contain"
+              />
+            </div>
           </div>
         </div>
       )}
